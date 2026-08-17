@@ -1,2 +1,5 @@
 target/
 Cargo.lock
+.idea/
+active_hermes.txt
+__pycache__/

@@ -418,6 +418,159 @@ impl Pattern for OrbitCubePattern {
     }
 }
 
+struct NebulaPattern;
+impl Pattern for NebulaPattern {
+    fn name(&self) -> &'static str { "13. Nebula" }
+    // Turbulent cloud: orbital radius up to ~1.5 plus activity-driven
+    // turbulence displacement, so the cloud fills the viewport.
+    fn extent(&self) -> (f32, f32) { (1.6, 1.6) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        // Re-anchor onto a soft gas cloud: each particle gets a random
+        // orbital radius (sqrt-distributed for even density), a random
+        // azimuth, and a shallow vertical spread — like a flattened
+        // nebula disc seen face-on.
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let u = (i as f32 + 0.5) / n;
+            let r = (u.sqrt() * 1.5).max(0.05);
+            let a = (i as f32 * 2.399_963) % std::f32::consts::TAU; // golden angle
+            p.base_x = a.cos() * r;
+            p.base_y = a.sin() * r;
+            p.base_z = (fastrand::f32() - 0.5) * 0.35;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+            p.phase = (i as f32 * 0.1) % std::f32::consts::TAU;
+            p.size = 0.5 + fastrand::f32() * 0.9;
+        }
+    }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let t = ctx.frame as f32 * 0.016;
+        let act = ctx.activity;
+        let vfill = ctx.vram_fill;
+        // Each particle orbits its anchor with a per-particle speed and
+        // radius, so the cloud slowly churns like gas in a nebula.
+        let orbit_speed = 0.10 + p.phase.sin().abs() * 0.20;
+        let a = t * orbit_speed + p.phase;
+        let orbit_r = 0.15 + p.phase.cos().abs() * 0.25;
+        // Turbulence: a wandering pseudo-noise displacement that grows
+        // with GPU activity — a busy GPU stirs the cloud into eddies.
+        let turb = act * (0.10 + 0.20 * (t * 0.7 + p.phase * 3.0).sin());
+        let tx = p.base_x + a.cos() * orbit_r + (t * 0.5 + p.phase * 2.0).sin() * turb;
+        let ty = p.base_y + a.sin() * orbit_r + (t * 0.4 + p.phase * 2.5).cos() * turb;
+        // VRAM fill gently expands the cloud outward (denser gas pushes out).
+        let expand = 1.0 + vfill * 0.15;
+        let tz = p.base_z + (t * 0.6 + p.phase).sin() * act * 0.15;
+        let spring = 0.05 + act * 0.05;
+        p.vx += (tx * expand - p.x) * spring;
+        p.vy += (ty * expand - p.y) * spring;
+        p.vz += (tz - p.z) * spring;
+        let damp = 0.90 - act * 0.04;
+        p.vx *= damp; p.vy *= damp; p.vz *= damp;
+        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        // Nebula palette: deep indigo → violet → magenta/pink, with the
+        // hue shifting toward hot pink as GPU activity rises. Brightness
+        // scales with activity and per-particle phase shimmer.
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
+        let core = 1.0 - (dist / 1.5).clamp(0.0, 1.0); // brighter near centre
+        let shimmer = 0.75 + 0.25 * (p.phase + t * 1.2).sin().abs();
+        let heat = (act + core * 0.4).clamp(0.0, 1.0);
+        // indigo (deep) -> violet -> magenta as heat rises
+        let r = (60.0 + heat * 195.0) * shimmer;
+        let g = (40.0 + heat * 60.0) * shimmer;
+        let b = (180.0 + heat * 75.0) * shimmer;
+        Some((r, g, b))
+    }
+}
+
+struct SpherePattern;
+impl Pattern for SpherePattern {
+    fn name(&self) -> &'static str { "14. Sphere" }
+    // Sphere radius ~1.0 plus activity-driven pulse, so it fills the viewport.
+    fn extent(&self) -> (f32, f32) { (1.15, 1.15) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        // Re-anchor onto a sphere surface using a Fibonacci sphere
+        // distribution — uniform density over the surface (no poles or
+        // clumps), radius 1.0.
+        let n = particles.len() as f32;
+        let golden = 2.399_963; // golden angle
+        for (i, p) in particles.iter_mut().enumerate() {
+            let u = (i as f32 + 0.5) / n;
+            // Fibonacci sphere: y from -1..1, azimuth from golden angle.
+            let phi = (1.0 - 2.0 * u) * std::f32::consts::PI; // polar angle
+            let theta = golden * i as f32;                    // azimuth
+            let (sin_p, cos_p) = phi.sin_cos();
+            let (sin_t, cos_t) = theta.sin_cos();
+            let r = 1.0;
+            p.base_x = r * sin_p * cos_t;
+            p.base_y = r * cos_p;
+            p.base_z = r * sin_p * sin_t;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+            p.phase = (i as f32 * 0.1) % std::f32::consts::TAU;
+            p.size = 0.5 + fastrand::f32() * 0.7;
+        }
+    }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        // The spin rate is pre-smoothed in step() (flywheel effect) and
+        // passed via ctx.frame as a fixed-point value (spin * 1_000_000),
+        // exactly like OrbitCube — the sphere has mass/inertia.
+        let spin_rate = ctx.frame as f32 / 1_000_000.0;
+        p.phase += spin_rate;
+        let a = p.phase;
+        let cos_a = a.cos();
+        let sin_a = a.sin();
+        // Rotate the sphere around the Y axis (primary spin) with a slow
+        // X-axis wobble so it reads as a solid 3D object, not a flat disc.
+        let wob = (a * 0.3).sin() * 0.15;
+        let cos_w = wob.cos();
+        let sin_w = wob.sin();
+        // Y-axis rotation: x' = x cos - z sin, z' = x sin + z cos.
+        let rx = p.base_x * cos_a - p.base_z * sin_a;
+        let rz = p.base_x * sin_a + p.base_z * cos_a;
+        let ry = p.base_y;
+        // X-axis wobble: y' = y cos - z sin, z' = y sin + z cos.
+        let ry2 = ry * cos_w - rz * sin_w;
+        let rz2 = ry * sin_w + rz * cos_w;
+        // Activity-driven breathing: a busy GPU swells the sphere outward.
+        let breathe = 1.0 + ctx.activity * 0.08;
+        let tx = rx * breathe;
+        let ty = ry2 * breathe;
+        let tz = rz2 * breathe;
+        let spring = 0.10;
+        p.vx += (tx - p.x) * spring;
+        p.vy += (ty - p.y) * spring;
+        p.vz += (tz - p.z) * spring;
+        p.vx *= 0.85; p.vy *= 0.85; p.vz *= 0.85;
+        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        // Cool blue-cyan sphere with a bright rim: particles near the
+        // silhouette edge (where the surface normal points sideways) are
+        // brighter, giving a convincing 3D sphere. Warms toward cyan/white
+        // as GPU activity rises.
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        // Approximate the current rotated position for the rim highlight.
+        let a = p.phase;
+        let rx = p.base_x * a.cos() - p.base_z * a.sin();
+        let rz = p.base_x * a.sin() + p.base_z * a.cos();
+        // "Rim" = how far the particle is from the front-facing centre in
+        // screen space (x,y). Particles near the edge of the disc are the
+        // silhouette rim and get a bright highlight.
+        let rim = (rx * rx + p.base_y * p.base_y).sqrt().clamp(0.0, 1.0);
+        let shimmer = 0.8 + 0.2 * (p.phase + t * 1.5).sin().abs();
+        let heat = act;
+        let r = (40.0 + rim * 120.0 + heat * 60.0) * shimmer;
+        let g = (90.0 + rim * 140.0 + heat * 40.0) * shimmer;
+        let b = (200.0 + rim * 55.0) * shimmer;
+        Some((r, g, b))
+    }
+}
+
 struct RegionsPattern;
 impl Pattern for RegionsPattern {
     fn name(&self) -> &'static str { "8. Regions" }
@@ -850,6 +1003,43 @@ struct ProcessInfo {
     model: String,
 }
 
+// ─── runtime config ───
+//
+// Tunables read from environment variables at startup so Monitor² (or any
+// launcher) can parameterise the visual without editing or rebuilding the
+// source. Defaults reproduce the original tuned behaviour exactly.
+//
+//   CUDA_MONITOR_MAX_SPIN   max rotation coefficient (default 0.015)
+//   CUDA_MONITOR_LIGHTNING  lightning intensity multiplier, 0.0..3.0
+//                           (default 1.0; 0 disables lightning entirely)
+#[derive(Clone, Copy)]
+struct Config {
+    max_rotation: f32,
+    lightning: f32,
+}
+
+impl Config {
+    fn from_env() -> Self {
+        fn env_f(name: &str, default: f32) -> f32 {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| v.is_finite())
+                .unwrap_or(default)
+        }
+        Config {
+            max_rotation: env_f("CUDA_MONITOR_MAX_SPEED", 0.015),
+            lightning: env_f("CUDA_MONITOR_LIGHTNING", 1.0).max(0.0),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { max_rotation: 0.015, lightning: 1.0 }
+    }
+}
+
 struct VramVisualizer {
     // UI state: whether the footer context popup is currently shown.
     show_footer_popup: bool,
@@ -885,6 +1075,8 @@ struct VramVisualizer {
     // Smoothed spin rate — a heavy flywheel that takes time to speed up
     // and slow down, giving the cloud a sense of mass/inertia.
     spin_s: f32,
+    // Runtime tunables (rotation speed, lightning intensity).
+    cfg: Config,
 }
 
 impl VramVisualizer {
@@ -897,6 +1089,8 @@ impl VramVisualizer {
         // Restrict to only the OrbitCube pattern (pattern 3).
         let patterns: Vec<Box<dyn Pattern>> = vec![
             Box::new(OrbitCubePattern),
+            Box::new(NebulaPattern),
+            Box::new(SpherePattern),
         ];
         let mut s = Self {
             show_footer_popup: false,
@@ -909,7 +1103,7 @@ impl VramVisualizer {
             particles,
             last_poll: Instant::now(),
             frame: 0,
-            // With only one pattern, index 0 is the OrbitCube visualisation.
+            // Three patterns: 0 OrbitCube, 1 Nebula, 2 Sphere.
             active_idx: 0,
             patterns,
             history: Vec::with_capacity(HISTORY_MAX),
@@ -921,9 +1115,10 @@ impl VramVisualizer {
             // start with cooldown ready to fire immediately
             strike_cooldown: 0.0,
             spin_s: 0.0,
+            cfg: Config::from_env(),
         };
 
-        // Activate the sole pattern.
+        // Activate the first pattern.
         s.patterns[s.active_idx].on_activate(&mut s.particles);
         s
     }
@@ -996,7 +1191,7 @@ impl VramVisualizer {
         // smooth it heavily so the cloud accelerates/decelerates like it
         // has real mass — no jerky speed changes when GPU usage spikes.
         let log_activity = (1.0 + self.act_s * 9.0).ln() / 10.0_f32.ln();
-        let mut target_spin = 0.0001 + log_activity * 0.015;
+        let mut target_spin = 0.0001 + log_activity * self.cfg.max_rotation;
         // Above 90% GPU, halve the rotation speed — the cloud slows back
         // down at the extreme top end rather than spinning fastest there.
         if self.act_s > 0.9 {
@@ -1087,6 +1282,8 @@ impl eframe::App for VramVisualizer {
                         egui::Key::Num0 => Some(9),  // 10. SpiralGalaxy
                         egui::Key::Minus => Some(10), // 11. GridWave
                         egui::Key::Equals => Some(11), // 12. Chimera
+                        egui::Key::N => Some(1),  // N. Nebula (index 1)
+                        egui::Key::S => Some(2),  // S. Sphere (index 2)
                         _ => None,
                     };
                     if let Some(idx) = new_idx { self.switch_to(idx); }
@@ -1167,61 +1364,119 @@ impl eframe::App for VramVisualizer {
                 );
                 painter.circle_filled(egui::pos2(sx, sy), point_size, color);
             }
-            // Simulated lightning between two random points, adapted to GPU usage and limited to ~3 Hz
+            // Tesla-coil lightning: big branching arcs between distant points
+            // on the sphere, with a bright core and a coloured glow halo.
             {
                 use egui::{pos2, vec2, Color32, Shape, Stroke};
-                // Lightning strike rate scales linearly from 1.0/sec at 0% GPU
-                // to 5.5/sec at 100% GPU. The cooldown is set to 1/rate each strike.
-                if self.strike_cooldown <= 0.0 {
-                    // Strike rate: 1.0 Hz at 0% → 5.5 Hz at 100%
-                    let strike_rate = 1.0 + (self.gpu.util / 100.0) * 4.5;
+                let lite = self.cfg.lightning;
+                // Tesla coils crackle continuously. Base rate is higher than
+                // the old bolts and scales with GPU usage and intensity.
+                if lite > 0.0 && self.strike_cooldown <= 0.0 {
+                    // Strike rate: 2.0 Hz at 0% → (2.0 + 8.0*intensity) Hz at 100%
+                    let strike_rate = 2.0 + (self.gpu.util / 100.0) * (8.0 * lite);
                     if fastrand::f32() < (strike_rate / 60.0) {
                         self.strike_cooldown = 1.0 / strike_rate;
-                        // Lightning emanates from the centre (cx, cy) outward
-                        // to a random particle. The reach scales with GPU usage:
-                        // low usage → short bolts near centre, high usage → long
-                        // bolts reaching the outer edges of the cloud.
                         let usage_factor = (self.gpu.util / 100.0).clamp(0.0, 1.0);
+                        // Pick two DISTANT particles on the sphere so the arc
+                        // spans the full sphere (a big Tesla coil discharge).
+                        // Retry to find two on-screen points far apart.
                         let mut attempts = 0;
                         let mut chosen = None;
-                        while attempts < 10 {
+                        while attempts < 20 {
+                            let i1 = fastrand::usize(0..sorted.len());
                             let i2 = fastrand::usize(0..sorted.len());
+                            if i1 == i2 { attempts += 1; continue; }
+                            let p1 = &sorted[i1];
                             let p2 = &sorted[i2];
-                            let depth2 = 3.0 / (3.0 + p2.z * 0.8);
-                            let sx2 = cx + p2.x * scale * depth2;
-                            let sy2 = cy + p2.y * scale * depth2;
+                            let d1 = 3.0 / (3.0 + p1.z * 0.8);
+                            let d2 = 3.0 / (3.0 + p2.z * 0.8);
+                            let s1x = cx + p1.x * scale * d1;
+                            let s1y = cy + p1.y * scale * d1;
+                            let s2x = cx + p2.x * scale * d2;
+                            let s2y = cy + p2.y * scale * d2;
                             let within = |x: f32, y: f32| {
                                 x >= rect.left() - 10.0 && x <= rect.right() + 10.0 && y >= rect.top() - 10.0 && y <= rect.bottom() + 10.0
                             };
-                            if within(sx2, sy2) {
-                                // Start point is always the centre; end point is
-                                // the particle, scaled by usage_factor so low GPU
-                                // keeps bolts short and near the middle.
-                                let reach = 0.15 + 0.85 * usage_factor;
-                                let ex = cx + (sx2 - cx) * reach;
-                                let ey = cy + (sy2 - cy) * reach;
-                                chosen = Some(((cx, cy), (ex, ey), depth2));
+                            // Require a minimum screen distance so arcs are big.
+                            let dist = ((s2x - s1x).powi(2) + (s2y - s1y).powi(2)).sqrt();
+                            if within(s1x, s1y) && within(s2x, s2y) && dist > rect.width() * 0.25 {
+                                chosen = Some(((s1x, s1y), (s2x, s2y), (d1 + d2) * 0.5));
                                 break;
                             }
                             attempts += 1;
                         }
                         if let Some(((sx1, sy1), (sx2, sy2), depth_scale)) = chosen {
-                            // Build a jagged polyline from centre outward
-                            let segments = 8usize;
-                            let mut points = Vec::with_capacity(segments + 1);
-                            points.push(pos2(sx1, sy1));
-                            let usage_factor = (self.gpu.util / 100.0).clamp(0.0, 1.0);
+                            // Build a jagged, angular main bolt (Tesla arcs are
+                            // sharp, not smooth). Bow slightly toward the centre.
+                            let segments = 12usize;
+                            let mut main = Vec::with_capacity(segments + 1);
+                            main.push(pos2(sx1, sy1));
+                            let mx = (sx1 + sx2) * 0.5;
+                            let my = (sy1 + sy2) * 0.5;
+                            let bow = 0.15 + 0.30 * usage_factor;
+                            let jitter_amp = 16.0 * depth_scale * (0.5 + usage_factor) * (0.6 + 0.4 * lite).min(2.0);
+                            let perp = vec2(sy2 - sy1, -(sx2 - sx1)).normalized();
                             for i in 1..segments {
                                 let t = i as f32 / segments as f32;
                                 let ix = sx1 + (sx2 - sx1) * t;
                                 let iy = sy1 + (sy2 - sy1) * t;
-                                // Perpendicular jitter grows with usage
-                                let perp = vec2(sy2 - sy1, -(sx2 - sx1)).normalized() * ((fastrand::f32() - 0.5) * 12.0 * depth_scale * usage_factor);
-                                points.push(pos2(ix + perp.x, iy + perp.y));
+                                let arc = (t * (1.0 - t)) * 4.0 * bow;
+                                let bx = ix + (cx - mx) * arc;
+                                let by = iy + (cy - my) * arc;
+                                // Sharp angular jitter (Tesla arcs zig-zag hard).
+                                let j = (fastrand::f32() - 0.5) * jitter_amp;
+                                main.push(pos2(bx + perp.x * j, by + perp.y * j));
                             }
-                            points.push(pos2(sx2, sy2));
-                            let stroke_width = (2.0 * depth_scale * (0.3 + 0.7 * usage_factor)).max(0.5);
-                            painter.add(Shape::line(points, Stroke::new(stroke_width, Color32::from_rgb(255, 255, 200))));
+                            main.push(pos2(sx2, sy2));
+
+                            // Branching: 2-3 secondary arcs split off the main
+                            // bolt at random points and shoot outward — the
+                            // classic Tesla coil corona.
+                            let branches = 2 + (fastrand::usize(0..2));
+                            let mut branch_lines: Vec<Vec<egui::Pos2>> = Vec::new();
+                            for _ in 0..branches {
+                                // Pick a split point partway along the main bolt.
+                                let bt = 0.2 + fastrand::f32() * 0.6;
+                                let bi = (bt * segments as f32) as usize;
+                                let bi = bi.clamp(1, segments - 1);
+                                let start = main[bi];
+                                // Branch shoots outward (away from the chord),
+                                // length scales with usage and intensity.
+                                let blen = (0.15 + 0.35 * usage_factor) * (0.6 + 0.4 * lite).min(2.0) * rect.width() * 0.12;
+                                let bdir = vec2(sx2 - sx1, sy2 - sy1).normalized();
+                                let bperp = vec2(-bdir.y, bdir.x);
+                                let bangle = (fastrand::f32() - 0.5) * 2.0; // which side
+                                let bvec = bdir * (fastrand::f32() * 0.3) + bperp * bangle;
+                                let bvec = bvec.normalized();
+                                let mut bline = vec![start];
+                                let mut bx = start.x;
+                                let mut by = start.y;
+                                let bsegs = 4usize;
+                                for s in 0..bsegs {
+                                    let f = (s + 1) as f32 / bsegs as f32;
+                                    bx += bvec.x * blen / bsegs as f32;
+                                    by += bvec.y * blen / bsegs as f32;
+                                    // Small jitter on the branch too.
+                                    bx += (fastrand::f32() - 0.5) * jitter_amp * 0.5;
+                                    by += (fastrand::f32() - 0.5) * jitter_amp * 0.5;
+                                    bline.push(pos2(bx, by));
+                                }
+                                branch_lines.push(bline);
+                            }
+
+                            // Glow halo: a wide, dim coloured line under the core.
+                            let glow_w = (6.0 * depth_scale * (0.5 + usage_factor) * (0.6 + 0.4 * lite).min(2.0)).max(2.0);
+                            let glow_col = Color32::from_rgba_premultiplied(60, 120, 255, 60);
+                            painter.add(Shape::line(main.clone(), Stroke::new(glow_w, glow_col)));
+                            for bl in &branch_lines {
+                                painter.add(Shape::line(bl.clone(), Stroke::new(glow_w * 0.6, glow_col)));
+                            }
+                            // Bright white-hot core.
+                            let core_w = (2.2 * depth_scale * (0.4 + 0.6 * usage_factor) * (0.6 + 0.4 * lite).min(2.0)).max(1.0);
+                            painter.add(Shape::line(main.clone(), Stroke::new(core_w, Color32::from_rgb(255, 255, 240))));
+                            for bl in &branch_lines {
+                                painter.add(Shape::line(bl.clone(), Stroke::new(core_w * 0.7, Color32::from_rgb(255, 255, 240))));
+                            }
                             // Record a strike in the histogram based on current GPU utilization.
                             let usage = self.gpu.util;
                             let mut bin = (usage / 10.0).floor() as usize;
@@ -2084,5 +2339,71 @@ mod ad_hoc_verify {
         // because some particles will be at the outer edge.
         assert!(max_r > 1.30,
             "vortex respawn should reach >1.30 for HD fill, got max_r={max_r}");
+    }
+
+    #[test]
+    fn nebula_anchors_fills_viewport_and_stays_finite() {
+        // 13.Nebula must re-anchor onto a wide gas cloud (fills the
+        // viewport), and its physics must keep every particle at finite
+        // positions across many frames at high activity (no blow-up).
+        let mut p = NebulaPattern;
+        let mut particles: Vec<Particle> = (0..PARTICLE_COUNT).map(|i| init_particle_cylinder(i)).collect();
+        p.on_activate(&mut particles);
+
+        // Fills the viewport: max radius should reach ~1.5.
+        let max_r = particles.iter()
+            .map(|q| (q.base_x.powi(2) + q.base_y.powi(2)).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!(max_r > 1.2,
+            "Nebula should fill the viewport, got max_r={max_r}");
+
+        // Physics stays finite and bounded under sustained high load.
+        let c = PatternCtx { frame: 0, activity: 1.0, vram_fill: 1.0, temp_factor: 1.0 };
+        for _ in 0..300 {
+            for q in &mut particles {
+                p.update(q, &c);
+            }
+        }
+        for q in &particles {
+            assert!(q.x.is_finite() && q.y.is_finite() && q.z.is_finite(),
+                "Nebula produced a non-finite position");
+            assert!(q.x.abs() < 10.0 && q.y.abs() < 10.0 && q.z.abs() < 10.0,
+                "Nebula particle escaped bounds: ({}, {}, {})", q.x, q.y, q.z);
+        }
+        // Distinct name so it's not a silent duplicate.
+        assert_eq!(p.name(), "13. Nebula");
+    }
+
+    #[test]
+    fn sphere_anchors_on_surface_and_stays_finite() {
+        // 14.Sphere must re-anchor particles onto a sphere surface (all at
+        // radius ~1.0, uniform density), and its physics must keep every
+        // particle finite and bounded under sustained high load.
+        let mut p = SpherePattern;
+        let mut particles: Vec<Particle> = (0..PARTICLE_COUNT).map(|i| init_particle_cylinder(i)).collect();
+        p.on_activate(&mut particles);
+
+        // All particles sit on the sphere surface: radius ≈ 1.0.
+        for q in &particles {
+            let r = (q.base_x.powi(2) + q.base_y.powi(2) + q.base_z.powi(2)).sqrt();
+            assert!((r - 1.0).abs() < 0.01,
+                "Sphere particle should sit on radius 1.0, got r={r}");
+        }
+
+        // Physics stays finite and bounded under sustained high load.
+        let c = PatternCtx { frame: 0, activity: 1.0, vram_fill: 1.0, temp_factor: 1.0 };
+        for _ in 0..300 {
+            for q in &mut particles {
+                p.update(q, &c);
+            }
+        }
+        for q in &particles {
+            assert!(q.x.is_finite() && q.y.is_finite() && q.z.is_finite(),
+                "Sphere produced a non-finite position");
+            assert!(q.x.abs() < 10.0 && q.y.abs() < 10.0 && q.z.abs() < 10.0,
+                "Sphere particle escaped bounds: ({}, {}, {})", q.x, q.y, q.z);
+        }
+        // Distinct name so it's not a silent duplicate.
+        assert_eq!(p.name(), "14. Sphere");
     }
 }

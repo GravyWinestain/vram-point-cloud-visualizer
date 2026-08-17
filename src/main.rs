@@ -953,10 +953,13 @@ impl VramVisualizer {
             }
             Err(e) => self.error = e,
         }
-        // Updated: capture per-process info.
+        // Updated: capture per-process info and estimate tok/s.
         if let Ok((model_str, procs)) = query_loaded_model() {
-            self.loaded_model = model_str;
+            self.loaded_model = model_str.clone();
             self.processes = procs;
+            // Estimate tok/s from model name + GPU utilisation.
+            // RTX 4060 Ti baseline: ~100 tok/s for a 7B Q4 at 100% GPU.
+            self.tok_s = estimate_tok_s(&model_str, self.gpu.util);
         }
     }
 
@@ -1235,9 +1238,8 @@ impl eframe::App for VramVisualizer {
 
 
 
-            // HUD — minimal: Model + tok/s, with space for a second model
+            // HUD — minimal: Model + tok/s, second row only if a second model is loaded
             let hud_color = egui::Color32::from_rgba_premultiplied(200, 200, 220, 180);
-            let hud_dim = egui::Color32::from_rgba_premultiplied(120, 120, 140, 140);
             ui.vertical(|ui| {
                 // Line 1: primary model + tok/s
                 ui.horizontal(|ui| {
@@ -1248,15 +1250,17 @@ impl eframe::App for VramVisualizer {
                     ui.label(egui::RichText::new(tps)
                         .size(14.0).color(hud_color));
                 });
-                // Line 2: second model + tok/s (provision for future)
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&self.loaded_model2)
-                        .size(14.0).color(hud_dim));
-                    ui.separator();
-                    let tps2 = if self.tok_s2 > 0.0 { format!("{:.1} tok/s", self.tok_s2) } else { String::from("—") };
-                    ui.label(egui::RichText::new(tps2)
-                        .size(14.0).color(hud_dim));
-                });
+                // Line 2: second model + tok/s (only shown when populated)
+                if self.loaded_model2 != "—" {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&self.loaded_model2)
+                            .size(14.0).color(hud_color));
+                        ui.separator();
+                        let tps2 = if self.tok_s2 > 0.0 { format!("{:.1} tok/s", self.tok_s2) } else { String::from("—") };
+                        ui.label(egui::RichText::new(tps2)
+                            .size(14.0).color(hud_color));
+                    });
+                }
             });
         });
         ctx.request_repaint();
@@ -1349,6 +1353,33 @@ fn query_loaded_model() -> Result<(String, Vec<ProcessInfo>), String> {
         model_names.join(" + ")
     };
     Ok((model_str, processes))
+}
+
+/// Estimate tokens/second from the model name and GPU utilisation.
+/// RTX 4060 Ti baseline: ~100 tok/s for a 7B Q4 model at 100% GPU util.
+/// Extracts parameter count from the model name (e.g. "gemma4:9b" → 9.0).
+fn estimate_tok_s(model_name: &str, gpu_util: f32) -> f32 {
+    // Look for a pattern like "9b", "14B", "7b" in the model name
+    let mut param_count: f32 = 7.0; // default if not found
+    let lower = model_name.to_lowercase();
+    let bytes = lower.as_bytes();
+    for i in 0..bytes.len().saturating_sub(1) {
+        if bytes[i].is_ascii_digit() && (bytes[i + 1] == b'b') {
+            // Parse the full number before 'b'
+            let mut start = i;
+            while start > 0 && bytes[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+            if let Ok(n) = std::str::from_utf8(&bytes[start..i + 1]).unwrap_or("7").parse::<f32>() {
+                if n > 0.0 {
+                    param_count = n;
+                }
+            }
+            break;
+        }
+    }
+    let max_tok = 100.0 * (7.0 / param_count).max(0.1);
+    max_tok * (gpu_util / 100.0)
 }
 
 fn http_get(host_port: &str, path: &str) -> Result<String, String> {

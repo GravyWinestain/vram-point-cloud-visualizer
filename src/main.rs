@@ -856,6 +856,11 @@ struct VramVisualizer {
     gpu: GpuData,
     error: String,
     loaded_model: String,
+    // Second model slot (for future dual-model display).
+    loaded_model2: String,
+    // Tokens/sec for each model (populated from Ollama stats if available).
+    tok_s: f32,
+    tok_s2: f32,
     particles: Vec<Particle>,
     last_poll: Instant,
     frame: u64,
@@ -898,6 +903,9 @@ impl VramVisualizer {
             gpu: GpuData::default(),
             error: String::new(),
             loaded_model: String::from("—"),
+            loaded_model2: String::from("—"),
+            tok_s: 0.0,
+            tok_s2: 0.0,
             particles,
             last_poll: Instant::now(),
             frame: 0,
@@ -1227,79 +1235,29 @@ impl eframe::App for VramVisualizer {
 
 
 
-            // HUD – right‑click on the footer row toggles a popup (detect via invisible overlay)
+            // HUD — minimal: Model + tok/s, with space for a second model
             let hud_color = egui::Color32::from_rgba_premultiplied(200, 200, 220, 180);
-            let hud_resp = ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("MOD {}", self.loaded_model))
-                    .size(14.0).color(hud_color))
-                    .on_hover_text("Process currently holding GPU memory (nvidia-smi compute-apps)");
-                // Show per‑process info with kill button
-                for proc in &self.processes {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("{} (PID {}): {:.0} MB", proc.name, proc.pid, proc.used_memory_mb))
-                            .size(12.0).color(hud_color));
-                        if ui.button("Kill").clicked() {
-                            let _ = std::process::Command::new("kill").arg("-9").arg(proc.pid.to_string()).status();
-                        }
-                    });
-                }
-                ui.separator();
-                ui.label(egui::RichText::new(format!("VRAM  {:.0} / {:.0} MB", self.gpu.vram_used_mb, self.gpu.vram_total_mb))
-                    .size(16.0).color(hud_color));
-                ui.separator();
-                ui.label(egui::RichText::new(format!("GPU  {:.0}%", self.gpu.util))
-                    .size(16.0).color(hud_color));
-                // Lightning strike histogram (10 bins of GPU usage)
-                let bin_counts: Vec<String> = (0..10).map(|i| {
-                    let low = i * 10;
-                    let high = (i + 1) * 10;
-                    format!("{}-{}%: {}", low, high, self.strike_bins[i])
-                }).collect();
-                ui.label(egui::RichText::new(format!("Strikes: {}", bin_counts.join(", ")))
-                    .size(12.0).color(hud_color));
-                ui.separator();
-                ui.label(egui::RichText::new(format!("Temp: {:.0}°C", self.gpu.temp_c))
-                    .size(16.0).color(hud_color));
-                ui.separator();
-                ui.label(egui::RichText::new(format!("{:.0} W", self.gpu.power_w))
-                    .size(16.0).color(hud_color));
-            }).response;
-            // Add an invisible clickable area covering the bottom of the window (≈30px high)
-            let footer_rect = {
-                let mut r = ui.max_rect();
-                r.min.y = r.max.y - 30.0; // height of the footer region
-                r
-            };
-            let footer_resp = ui.interact(footer_rect, ui.id().with("footer_area"), egui::Sense::click());
-            if footer_resp.secondary_clicked() {
-                self.show_footer_popup = !self.show_footer_popup;
-            }
-            // Optional popup showing the same info
-            if self.show_footer_popup {
-                egui::Window::new("GPU / Process Info")
-                    .open(&mut self.show_footer_popup)
-                    .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-10.0, -10.0))
-                    .show(ctx, |ui| {
-                        ui.label(format!("Model: {}", self.loaded_model));
-                        for proc in &self.processes {
-                            ui.label(format!("{} (PID {}): {:.0} MB", proc.name, proc.pid, proc.used_memory_mb));
-                        }
-                        ui.separator();
-                        ui.label(format!("VRAM: {:.0}/{:.0} MB", self.gpu.vram_used_mb, self.gpu.vram_total_mb));
-                        ui.label(format!("GPU Util: {:.0}%", self.gpu.util));
-                        ui.label(format!("Temp: {:.0}°C", self.gpu.temp_c));
-                        ui.label(format!("Power: {:.0} W", self.gpu.power_w));
-                    });
-            }
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(self.current_name())
-                    .size(12.0).color(egui::Color32::from_rgba_premultiplied(150, 150, 170, 180)));
-                ui.label(egui::RichText::new(" | Tab/1-0/-/=/arrows to switch")
-                    .size(12.0).color(egui::Color32::from_rgba_premultiplied(100, 100, 120, 160)));
+            let hud_dim = egui::Color32::from_rgba_premultiplied(120, 120, 140, 140);
+            ui.vertical(|ui| {
+                // Line 1: primary model + tok/s
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&self.loaded_model)
+                        .size(14.0).color(hud_color));
+                    ui.separator();
+                    let tps = if self.tok_s > 0.0 { format!("{:.1} tok/s", self.tok_s) } else { String::from("—") };
+                    ui.label(egui::RichText::new(tps)
+                        .size(14.0).color(hud_color));
+                });
+                // Line 2: second model + tok/s (provision for future)
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&self.loaded_model2)
+                        .size(14.0).color(hud_dim));
+                    ui.separator();
+                    let tps2 = if self.tok_s2 > 0.0 { format!("{:.1} tok/s", self.tok_s2) } else { String::from("—") };
+                    ui.label(egui::RichText::new(tps2)
+                        .size(14.0).color(hud_dim));
+                });
             });
-            if !self.error.is_empty() {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("⚠ {}", self.error));
-            }
         });
         ctx.request_repaint();
     }

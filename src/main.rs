@@ -66,14 +66,12 @@ trait Pattern: Send {
 }
 
 // ─── built-in patterns ───
-//
-// Each pattern is a small zero-sized or self-contained struct so its
-// parameters can be tuned without touching the trait surface.
+// Each pattern is a small zero-sized or self-contained struct.
 
 struct VortexPattern;
 impl Pattern for VortexPattern {
     fn name(&self) -> &'static str { "1. Vortex" }
-    fn extent(&self) -> (f32, f32) { (1.7, 1.7) } // respawn radius 1.0..1.6 + swirl spread
+    fn extent(&self) -> (f32, f32) { (1.7, 1.7) }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let act = ctx.activity;
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
@@ -87,8 +85,6 @@ impl Pattern for VortexPattern {
         p.vx *= 0.993; p.vy *= 0.993; p.vz *= 0.97;
         if dist < 0.03 {
             let a = fastrand::f32() * std::f32::consts::TAU;
-            // Respawn at the new wider radius (1.0..1.6) so the vortex
-            // continues to fill the viewport after particles drain in.
             let r = 1.0 + fastrand::f32() * 0.6;
             p.x = a.cos() * r; p.y = a.sin() * r;
             p.z = (fastrand::f32() - 0.5) * 1.0;
@@ -107,8 +103,7 @@ impl Pattern for VortexPattern {
         let orange_chance = (temp - 0.25).clamp(0.0, 1.0) * 0.4;
         let is_orange = (p.phase + ctx.frame as f32 * 0.01).sin() > (1.0 - orange_chance * 2.0);
         let white_chance = ((temp - 0.7) / 0.3).clamp(0.0, 1.0) * 0.08;
-        let is_white = white_chance > 0.0
-            && (p.phase * 7.0 + ctx.frame as f32 * 0.03).sin() > (1.0 - white_chance * 2.0);
+        let is_white = white_chance > 0.0 && (p.phase * 7.0 + ctx.frame as f32 * 0.03).sin() > (1.0 - white_chance * 2.0);
         let (r, g, b) = if is_white {
             (240.0 + temp * 15.0, 200.0 + temp * 55.0, 160.0 + temp * 95.0)
         } else if is_orange {
@@ -124,12 +119,8 @@ impl Pattern for VortexPattern {
 struct CylinderPattern;
 impl Pattern for CylinderPattern {
     fn name(&self) -> &'static str { "2. Cylinder" }
-    fn extent(&self) -> (f32, f32) { (1.35, 1.35) } // radius 1.15 + orbit 0.15
+    fn extent(&self) -> (f32, f32) { (1.35, 1.35) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Re-anchor onto a cylinder. Every other pattern does this on
-        // activation (rings/cube/galaxy); without it, base_* is left at
-        // whatever the previous pattern set, so the spring pulls the flock
-        // to a stale shape and the cylinder never forms.
         let n = particles.len() as f32;
         for (i, p) in particles.iter_mut().enumerate() {
             let radius = 0.15 + (i as f32 / n) * 1.00;
@@ -162,30 +153,121 @@ impl Pattern for CylinderPattern {
     }
 }
 
+struct OrbitCubePattern;
+impl Pattern for OrbitCubePattern {
+    fn name(&self) -> &'static str { "3. OrbitCube" }
+    fn extent(&self) -> (f32, f32) { (1.6, 1.6) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        for p in particles.iter_mut() {
+            let r = 0.35 + fastrand::f32() * 2.2;
+            let u = fastrand::f32() * 2.0 - 1.0;
+            let phi = u.acos();
+            let theta = fastrand::f32() * std::f32::consts::TAU;
+            let (sin_p, cos_p) = phi.sin_cos();
+            let (sin_t, cos_t) = theta.sin_cos();
+            p.base_x = r * sin_p * cos_t;
+            p.base_y = r * sin_p * sin_t;
+            p.base_z = r * cos_p;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+            p.size = 0.4 + fastrand::f32().powi(2) * 1.4;
+        }
+    }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let spin_rate = ctx.frame as f32 / 1_000_000.0;
+        p.phase += spin_rate;
+        let a = p.phase;
+        let cos_a = a.cos();
+        let sin_a = a.sin();
+        let rtx = p.base_x * cos_a - p.base_z * sin_a;
+        let rtz = p.base_x * sin_a + p.base_z * cos_a;
+        let breathe = 1.0 + ctx.activity * 0.10;
+        let tx = rtx * breathe;
+        let ty = p.base_y * breathe;
+        let tz = rtz * breathe;
+        p.vx += (tx - p.x) * 0.10;
+        p.vy += (ty - p.y) * 0.10;
+        p.vz += (tz - p.z) * 0.10;
+        p.vx *= 0.85; p.vy *= 0.85; p.vz *= 0.85;
+        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    }
+}
+
+struct HeadPattern;
+impl Pattern for HeadPattern {
+    fn name(&self) -> &'static str { "4. Head" }
+    fn extent(&self) -> (f32, f32) { (1.2, 1.2) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let r = (i as f32) / n;
+            if r < 0.7 {
+                let phi = (i as f32 * 2.399_963) % std::f32::consts::TAU;
+                let theta = fastrand::f32() * std::f32::consts::PI;
+                let radius = 0.6;
+                p.base_x = radius * theta.sin() * phi.cos();
+                p.base_y = radius * theta.sin() * phi.sin();
+                p.base_z = radius * theta.cos();
+            } else if r < 0.9 {
+                let phi = (i as f32 * 2.399_963) % std::f32::consts::TAU;
+                let theta = fastrand::f32() * std::f32::consts::PI;
+                let radius = 0.3;
+                p.base_x = radius * theta.sin() * phi.cos();
+                p.base_y = radius * theta.sin() * phi.sin();
+                p.base_z = radius * theta.cos() - 0.5;
+            } else {
+                if fastrand::f32() > 0.5 {
+                    let side = if fastrand::f32() > 0.5 { 0.2 } else { -0.2 };
+                    p.base_x = side; p.base_y = 0.1; p.base_z = 0.3;
+                } else {
+                    p.base_x = 0.0; p.base_y = (fastrand::f32() - 0.5) * 0.1; p.base_z = 0.3 - fastrand::f32() * 0.3;
+                }
+            }
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+            p.phase = (i as f32 * 0.1) % std::f32::consts::TAU;
+        }
+    }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let t = ctx.frame as f32 * 0.016;
+        let act = ctx.activity;
+        let breathe = 1.0 + (t * 0.5 + p.phase).sin() * 0.05 * act;
+        let tx = p.base_x * breathe;
+        let ty = p.base_y * breathe;
+        let tz = p.base_z * breathe;
+        let drift = (t * 0.8 + p.phase).sin() * 0.02 * act;
+        let spring = 0.05 + ctx.vram_fill * 0.05;
+        p.vx += (tx + drift - p.x) * spring; p.vy += (ty + drift - p.y) * spring; p.vz += (tz + drift - p.z) * spring;
+        p.vx *= 0.9; p.vy *= 0.9; p.vz *= 0.9;
+        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        let vfill = ctx.vram_fill;
+        let act = ctx.activity;
+        let r = 50.0 + vfill * 200.0;
+        let g = 40.0 + act * 100.0;
+        let b = 200.0 + vfill * 55.0;
+        let flicker = 0.9 + (p.phase * 10.0 + ctx.frame as f32 * 0.1).sin() * 0.1;
+        Some((r * flicker, g * flicker, b * flicker))
+    }
+}
+
 struct ProcessCloudPattern;
 impl Pattern for ProcessCloudPattern {
-    fn name(&self) -> &'static str { "4. ProcessCloud" }
-    // node ring 0.75 + vortex churn up to ~0.30 when busy -> 1.05
+    fn name(&self) -> &'static str { "5. ProcessCloud" }
     fn extent(&self) -> (f32, f32) { (1.05, 1.05) }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
         let pid = p.process_id as f32;
-        // Whole process ring slowly precesses around the vertical axis (~40s
-        // per revolution) so the cloud is never a static frame.
         let rot = t * 0.15;
         let a0 = pid * 1.7;
         let cx = (a0 + rot).cos() * 0.75;
         let cy = (a0 + rot).sin() * 0.75;
         let cz = (pid * 0.9).sin() * 0.3;
-
-        // Data packets: a stable ~17% slice of each process flares out and
-        // travels along the ring toward the next node, reading as process
-        // communication. Staggered by per-particle phase so they don't move
-        // in lock-step. Never collapses, independent of GPU load.
         if p.phase.rem_euclid(std::f32::consts::TAU) < 1.1 {
             let prog = (t * 0.8 + p.phase).fract();
-            let ang = a0 + rot + prog * 1.7; // sweep arc to the next node
+            let ang = a0 + rot + prog * 1.7;
             let tx = ang.cos() * 0.72;
             let ty = ang.sin() * 0.72;
             let tz = (ang * 0.9).sin() * 0.3;
@@ -194,10 +276,6 @@ impl Pattern for ProcessCloudPattern {
             p.x += p.vx; p.y += p.vy; p.z += p.vz;
             return;
         }
-
-        // Churning vortex at each node. Radius stays lively even when idle
-        // (base r = 0.10) and swells with activity, so every process spins as
-        // a tight glowing swirl instead of collapsing into an inert dot.
         let swirl_t = t * 1.6 + p.phase * 3.0;
         let vr = 0.10 + act * 0.18 + p.phase.sin().abs() * 0.02;
         let tx = cx + swirl_t.cos() * vr;
@@ -220,66 +298,40 @@ impl Pattern for ProcessCloudPattern {
 struct AnimationPattern;
 impl Pattern for AnimationPattern {
     fn name(&self) -> &'static str { "6. Animation" }
-    // Snowstorm: respawns at the window top (y -1.30..-1.55, x ±1.2, z ±0.5)
-    // and falls toward the bottom; swirl keeps flakes inside; generous
-    // padding so gusts near the edge don't cull.
     fn extent(&self) -> (f32, f32) { (1.9, 1.4) }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
-        let act = ctx.activity; // GPU util drives the storm swirl (0..1)
-        let f = p.phase % 1.0;  // per-flake variance: mass, sway, sparkle
+        let act = ctx.activity;
+        let f = p.phase % 1.0;
         p.age += 0.016;
-
-        // --- Gravity toward a realistic terminal fall ---
-        // Screen projection is sy = cy + p.y*scale (all-positive factors), and
-        // egui's rect.bottom() is larger-y than rect.top(), so +y is
-        // screen-DOWN: the top is the smallest y and "falling" means
-        // increasing p.y. Heavier flakes fall faster (same air drag, more
-        // weight), which gives depth: big close flakes drop quicker, small
-        // far ones totter.
         let mass = 0.75 + 0.55 * f;
-        p.vy += 0.00034 * mass;      // gravity increment (mass-scaled, down)
-        p.vy *= 0.97;                // quadratic-ish drag -> terminal velocity
-        p.vx *= 0.985;               // light side drag lets swirl linger
+        p.vy += 0.00034 * mass;
+        p.vy *= 0.97;
+        p.vx *= 0.985;
         p.vz *= 0.985;
-
-        // --- GPU-driven storm swirl ---
-        // Falling snow gets stirred into eddies: a slowly wandering vortex
-        // core nudges each flake tangentially, so load shows as spiral,
-        // gusty descent instead of laminar straight lines. At idle (act=0)
-        // this term vanishes and it's calm snowfall.
         let swirl = act * (0.25 + 0.75 * f);
-        let core_x = 0.5 * (t * 0.35).sin();       // core wanders
+        let core_x = 0.5 * (t * 0.35).sin();
         let core_y = 0.2 * (t * 0.42).cos() - 0.1;
         let dx = p.x - core_x;
         let dy = p.y - core_y;
-        let d2 = dx * dx + dy * dy + p.z * p.z + 0.08; // softened core
-        p.vx += swirl * (-dy / d2) * 0.020;   // tangential spin
+        let d2 = dx * dx + dy * dy + p.z * p.z + 0.08;
+        p.vx += swirl * (-dy / d2) * 0.020;
         p.vz += swirl * ( dx / d2) * 0.020;
-        p.vy += swirl * (p.z / d2) * 0.012;   // gentle eddy lift
-        // fine flake sway — snow never falls perfectly straight
+        p.vy += swirl * (p.z / d2) * 0.012;
         p.vx += (t * 1.3 + p.phase * 7.0).sin() * act * 0.010;
         p.vz += (t * 0.9 + p.phase * 5.0).cos() * act * 0.010;
-
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
-
-        // Respawn at the TOP of the screen when a flake exits the field
-        // (including being carried sideways by a strong eddy) so nothing
-        // drifts off-screen. +y is screen-down, so the top is the most
-        // negative y and falling means increasing y.
         if p.age > 34.0 || p.y > 1.38 || p.x.abs() > 2.1 || p.z.abs() > 1.1 {
             p.x = (fastrand::f32() - 0.5) * 2.4;
-            p.y = -1.30 - fastrand::f32() * 0.25;    // top of the window (largest sy = low)
+            p.y = -1.30 - fastrand::f32() * 0.25;
             p.z = (fastrand::f32() - 0.5) * 1.0;
-            p.vx = (fastrand::f32() - 0.5) * 0.06;   // fresh gentle drift
-            p.vy = 0.008 + f * 0.008;                 // already falling (increasing y)
+            p.vx = (fastrand::f32() - 0.5) * 0.06;
+            p.vy = 0.008 + f * 0.008;
             p.vz = (fastrand::f32() - 0.5) * 0.06;
             p.age = 0.0;
         }
     }
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        // Ice-white snow; brighter in the storm, with per-flake sparkle so
-        // individual crystals shimmer against the dark void.
         let act = ctx.activity;
         let sparkle = 0.8 + 0.4 * (p.phase * 13.0).sin().abs();
         let v = (120.0 + act * 115.0) * sparkle;
@@ -287,19 +339,13 @@ impl Pattern for AnimationPattern {
     }
 }
 
-// Shared helper: re-anchor particles onto `rings` crisp concentric circles
-// in the x,y (screen) plane, radiating from the center out to `max_radius`.
-// Concentrating each band near its outer radius makes the circles read as
-// distinct glowing rings (the "concentric circles" look) rather than a
-// uniform disk smear.
+// Shared helper
 fn anchor_concentric_rings(particles: &mut [Particle], max_radius: f32, rings: usize) {
     let n = particles.len() as f32;
     for (i, p) in particles.iter_mut().enumerate() {
         let fr = i as f32 / n;
         let ring = (fr * rings as f32).min((rings - 1) as f32) as usize;
         let ring_radius = max_radius * (ring as f32 + 1.0) / rings as f32;
-        // Concentrate near the ring's radius with a little jitter so each
-        // ring is a crisp circle with a subtle halo.
         let r = ring_radius * (0.86 + 0.14 * fastrand::f32());
         let a = fr * std::f32::consts::TAU * (rings as f32) + (ring as f32) * 0.4;
         p.base_x = a.cos() * r;
@@ -307,29 +353,24 @@ fn anchor_concentric_rings(particles: &mut [Particle], max_radius: f32, rings: u
         p.base_z = (fastrand::f32() - 0.5) * 0.2;
         p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
         p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-        p.phase = (i % 64) as f32 * 0.098; // per-flake motion variation
-        p.process_id = ring as u8;          // ring index -> color/behaviour key
+        p.phase = (i % 64) as f32 * 0.098;
+        p.process_id = ring as u8;
     }
 }
 
 struct HeatScalePattern;
 impl Pattern for HeatScalePattern {
     fn name(&self) -> &'static str { "7. HeatScale" }
-    fn extent(&self) -> (f32, f32) { (1.35, 1.35) } // concentric heat rings to radius ~1.34
+    fn extent(&self) -> (f32, f32) { (1.35, 1.35) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
         anchor_concentric_rings(particles, 1.34, 5);
     }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        // Concentric heat rings that ripple outwards (diverging waves) and
-        // slowly spin — like heat shimmer spreading from a white-hot core.
-        // GPU activity cranks up the ripple speed/amplitude.
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
         let motion = 1.0 + act * 1.2;
-        let br = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt(); // ring radius
-        let ang = p.base_y.atan2(p.base_x);                          // angular slot
-        // Outward-travelling ripple: phase depends on (time - radius), so
-        // the wave moves away from the centre.
+        let br = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
+        let ang = p.base_y.atan2(p.base_x);
         let ripple = 0.045 * (1.0 + act * 1.5) * (t * 2.0 * motion - br * 5.0).sin();
         let rot = t * (0.06 + act * 0.10);
         let r = (br + ripple).max(0.02);
@@ -342,8 +383,6 @@ impl Pattern for HeatScalePattern {
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
     }
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        // Thermal ramp: white-hot core, graduating through orange to deep
-        // red at the cool rim. Base brightness rises with GPU activity.
         let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
         let n = (dist / 1.34).clamp(0.0, 1.0);
         let heat = (0.55 + ctx.activity * 0.45).clamp(0.0, 1.0);
@@ -355,647 +394,576 @@ impl Pattern for HeatScalePattern {
     }
 }
 
-struct OrbitCubePattern;
-impl Pattern for OrbitCubePattern {
-    fn name(&self) -> &'static str { "3. OrbitCube" }
-    fn extent(&self) -> (f32, f32) { (1.6, 1.6) } // zoomed past the cube faces: only the innermost shell + interior stars are in view, the 2.4/3.2 shells and cube edges fall off-screen
-    fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Uniform random star field — no cube faces, no clumps, no edges.
-        // Each particle gets a random radius (spread over a range for depth,
-        // lower-bounded to avoid a dense singularity at the pivot) and a
-        // uniformly-random direction on a sphere, so the whole pattern reads
-        // as an even scatter of individual stars rather than a geometric
-        // shape. There is deliberately no structured geometry here.
-        for p in particles.iter_mut() {
-            // Radius spread flat across depth: uniform radial density so
-            // no region is denser than another (a dense centre would read
-            // as a blob/"shape", which we deliberately avoid). The small
-            // lower bound keeps the exact pivot from being over-populated.
-            let r = 0.35 + fastrand::f32() * 2.2; // ~0.35..2.55, uniform
-            // Uniform direction on the unit sphere (correct sampling):
-            // colatitude phi via acos of a [-1,1] uniform, azimuth free.
-            let u = fastrand::f32() * 2.0 - 1.0;   // (-1, 1)
-            let phi = u.acos();                    // (0, PI) colatitude
-            let theta = fastrand::f32() * std::f32::consts::TAU;
-            let (sin_p, cos_p) = phi.sin_cos();
-            let (sin_t, cos_t) = theta.sin_cos();
-            let bx = r * sin_p * cos_t;
-            let by = r * sin_p * sin_t;
-            let bz = r * cos_p;
-            p.base_x = bx;
-            p.base_y = by;
-            p.base_z = bz;
-            p.x = bx; p.y = by; p.z = bz;
-            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-            // Star-like size: a few bright big ones amid many faint small ones.
-            p.size = 0.4 + fastrand::f32().powi(2) * 1.4;
-        }
-    }
-    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        // The spin rate is pre-smoothed in step() (flywheel effect) and
-        // passed via ctx.frame as a fixed-point value (spin * 1_000_000).
-        // This gives the cloud mass/inertia — it takes time to speed up
-        // and slow down, eliminating jerkiness.
-        let spin_rate = ctx.frame as f32 / 1_000_000.0;
-        p.phase += spin_rate;
-        let a = p.phase;
-        let cos_a = a.cos();
-        let sin_a = a.sin();
-        let rtx = p.base_x * cos_a - p.base_z * sin_a;
-        let rtz = p.base_x * sin_a + p.base_z * cos_a;
-        let rty = p.base_y; // second axis (slower) — keep it for free.
-        // Slight activity-driven breathing so a busy GPU pushes the
-        // stars outward a touch.
-        let breathe = 1.0 + ctx.activity * 0.10;
-        let tx = rtx * breathe;
-        let ty = rty * breathe;
-        let tz = rtz * breathe;
-        p.vx += (tx - p.x) * 0.10;
-        p.vy += (ty - p.y) * 0.10;
-        p.vz += (tz - p.z) * 0.10;
-        p.vx *= 0.85; p.vy *= 0.85; p.vz *= 0.85;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
-    }
-}
-
-struct NebulaPattern;
-impl Pattern for NebulaPattern {
-    fn name(&self) -> &'static str { "13. Nebula" }
-    // Turbulent cloud: orbital radius up to ~1.5 plus activity-driven
-    // turbulence displacement, so the cloud fills the viewport.
-    fn extent(&self) -> (f32, f32) { (1.6, 1.6) }
-    fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Re-anchor onto a soft gas cloud: each particle gets a random
-        // orbital radius (sqrt-distributed for even density), a random
-        // azimuth, and a shallow vertical spread — like a flattened
-        // nebula disc seen face-on.
-        let n = particles.len() as f32;
-        for (i, p) in particles.iter_mut().enumerate() {
-            let u = (i as f32 + 0.5) / n;
-            let r = (u.sqrt() * 1.5).max(0.05);
-            let a = (i as f32 * 2.399_963) % std::f32::consts::TAU; // golden angle
-            p.base_x = a.cos() * r;
-            p.base_y = a.sin() * r;
-            p.base_z = (fastrand::f32() - 0.5) * 0.35;
-            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
-            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-            p.phase = (i as f32 * 0.1) % std::f32::consts::TAU;
-            p.size = 0.5 + fastrand::f32() * 0.9;
-        }
-    }
-    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        let t = ctx.frame as f32 * 0.016;
-        let act = ctx.activity;
-        let vfill = ctx.vram_fill;
-        // Each particle orbits its anchor with a per-particle speed and
-        // radius, so the cloud slowly churns like gas in a nebula.
-        let orbit_speed = 0.10 + p.phase.sin().abs() * 0.20;
-        let a = t * orbit_speed + p.phase;
-        let orbit_r = 0.15 + p.phase.cos().abs() * 0.25;
-        // Turbulence: a wandering pseudo-noise displacement that grows
-        // with GPU activity — a busy GPU stirs the cloud into eddies.
-        let turb = act * (0.10 + 0.20 * (t * 0.7 + p.phase * 3.0).sin());
-        let tx = p.base_x + a.cos() * orbit_r + (t * 0.5 + p.phase * 2.0).sin() * turb;
-        let ty = p.base_y + a.sin() * orbit_r + (t * 0.4 + p.phase * 2.5).cos() * turb;
-        // VRAM fill gently expands the cloud outward (denser gas pushes out).
-        let expand = 1.0 + vfill * 0.15;
-        let tz = p.base_z + (t * 0.6 + p.phase).sin() * act * 0.15;
-        let spring = 0.05 + act * 0.05;
-        p.vx += (tx * expand - p.x) * spring;
-        p.vy += (ty * expand - p.y) * spring;
-        p.vz += (tz - p.z) * spring;
-        let damp = 0.90 - act * 0.04;
-        p.vx *= damp; p.vy *= damp; p.vz *= damp;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
-    }
-    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        // Nebula palette: deep indigo → violet → magenta/pink, with the
-        // hue shifting toward hot pink as GPU activity rises. Brightness
-        // scales with activity and per-particle phase shimmer.
-        let act = ctx.activity;
-        let t = ctx.frame as f32 * 0.016;
-        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
-        let core = 1.0 - (dist / 1.5).clamp(0.0, 1.0); // brighter near centre
-        let shimmer = 0.75 + 0.25 * (p.phase + t * 1.2).sin().abs();
-        let heat = (act + core * 0.4).clamp(0.0, 1.0);
-        // indigo (deep) -> violet -> magenta as heat rises
-        let r = (60.0 + heat * 195.0) * shimmer;
-        let g = (40.0 + heat * 60.0) * shimmer;
-        let b = (180.0 + heat * 75.0) * shimmer;
-        Some((r, g, b))
-    }
-}
-
-struct SpherePattern;
-impl Pattern for SpherePattern {
-    fn name(&self) -> &'static str { "14. Sphere" }
-    // Sphere radius ~1.0 plus activity-driven pulse, so it fills the viewport.
-    fn extent(&self) -> (f32, f32) { (1.15, 1.15) }
-    fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Re-anchor onto a sphere surface using a Fibonacci sphere
-        // distribution — uniform density over the surface (no poles or
-        // clumps), radius 1.0.
-        let n = particles.len() as f32;
-        let golden = 2.399_963; // golden angle
-        for (i, p) in particles.iter_mut().enumerate() {
-            let u = (i as f32 + 0.5) / n;
-            // Fibonacci sphere: y from -1..1, azimuth from golden angle.
-            let phi = (1.0 - 2.0 * u) * std::f32::consts::PI; // polar angle
-            let theta = golden * i as f32;                    // azimuth
-            let (sin_p, cos_p) = phi.sin_cos();
-            let (sin_t, cos_t) = theta.sin_cos();
-            let r = 1.0;
-            p.base_x = r * sin_p * cos_t;
-            p.base_y = r * cos_p;
-            p.base_z = r * sin_p * sin_t;
-            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
-            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-            p.phase = (i as f32 * 0.1) % std::f32::consts::TAU;
-            p.size = 0.5 + fastrand::f32() * 0.7;
-        }
-    }
-    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        // The spin rate is pre-smoothed in step() (flywheel effect) and
-        // passed via ctx.frame as a fixed-point value (spin * 1_000_000),
-        // exactly like OrbitCube — the sphere has mass/inertia.
-        let spin_rate = ctx.frame as f32 / 1_000_000.0;
-        p.phase += spin_rate;
-        let a = p.phase;
-        let cos_a = a.cos();
-        let sin_a = a.sin();
-        // Rotate the sphere around the Y axis (primary spin) with a slow
-        // X-axis wobble so it reads as a solid 3D object, not a flat disc.
-        let wob = (a * 0.3).sin() * 0.15;
-        let cos_w = wob.cos();
-        let sin_w = wob.sin();
-        // Y-axis rotation: x' = x cos - z sin, z' = x sin + z cos.
-        let rx = p.base_x * cos_a - p.base_z * sin_a;
-        let rz = p.base_x * sin_a + p.base_z * cos_a;
-        let ry = p.base_y;
-        // X-axis wobble: y' = y cos - z sin, z' = y sin + z cos.
-        let ry2 = ry * cos_w - rz * sin_w;
-        let rz2 = ry * sin_w + rz * cos_w;
-        // Activity-driven breathing: a busy GPU swells the sphere outward.
-        let breathe = 1.0 + ctx.activity * 0.08;
-        let tx = rx * breathe;
-        let ty = ry2 * breathe;
-        let tz = rz2 * breathe;
-        let spring = 0.10;
-        p.vx += (tx - p.x) * spring;
-        p.vy += (ty - p.y) * spring;
-        p.vz += (tz - p.z) * spring;
-        p.vx *= 0.85; p.vy *= 0.85; p.vz *= 0.85;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
-    }
-    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        // Cool blue-cyan sphere with a bright rim: particles near the
-        // silhouette edge (where the surface normal points sideways) are
-        // brighter, giving a convincing 3D sphere. Warms toward cyan/white
-        // as GPU activity rises.
-        let act = ctx.activity;
-        let t = ctx.frame as f32 * 0.016;
-        // Approximate the current rotated position for the rim highlight.
-        let a = p.phase;
-        let rx = p.base_x * a.cos() - p.base_z * a.sin();
-        let rz = p.base_x * a.sin() + p.base_z * a.cos();
-        // "Rim" = how far the particle is from the front-facing centre in
-        // screen space (x,y). Particles near the edge of the disc are the
-        // silhouette rim and get a bright highlight.
-        let rim = (rx * rx + p.base_y * p.base_y).sqrt().clamp(0.0, 1.0);
-        let shimmer = 0.8 + 0.2 * (p.phase + t * 1.5).sin().abs();
-        let heat = act;
-        let r = (40.0 + rim * 120.0 + heat * 60.0) * shimmer;
-        let g = (90.0 + rim * 140.0 + heat * 40.0) * shimmer;
-        let b = (200.0 + rim * 55.0) * shimmer;
-        Some((r, g, b))
-    }
-}
-
 struct RegionsPattern;
 impl Pattern for RegionsPattern {
     fn name(&self) -> &'static str { "8. Regions" }
-    fn extent(&self) -> (f32, f32) { (1.35, 1.35) } // concentric contour rings to radius ~1.34
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
-        anchor_concentric_rings(particles, 1.34, 7);
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let x = (i as f32 / n) * 3.0 - 1.5;
+            let y = ((i as f32 * 1.7).sin()) * 1.5;
+            p.base_x = x; p.base_y = y; p.base_z = 0.0;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        }
     }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        // Concentric contour "regions" that breathe in place (standing waves)
-        // and slowly rotate — like a topographic map of a circular terrain
-        // whose elevation rings swell with GPU activity.
-        let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
-        let br = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
-        let ang = p.base_y.atan2(p.base_x);
-        // Standing wave: phase tied to radius alone (not time) so rings
-        // breathe in/out in place; amplitude grows with GPU activity.
-        let breathe = 0.05 * (1.0 + act * 1.6) * (t * 1.4 - br * 4.0).sin();
-        let rot = t * (0.02 + act * 0.04); // slow contour drift
-        let r = (br + breathe).max(0.02);
-        let a = ang + rot;
-        let tx = a.cos() * r;
-        let ty = a.sin() * r;
-        // Depth undulation reveals the topography: elevation peaks travel
-        // around each ring, so the "regions" read as hills moving through
-        // the concentric circles.
-        let tz = (br * 6.0 + t * act * 2.0).sin() * 0.12 * (0.3 + act);
-        p.vx += (tx - p.x) * 0.08; p.vy += (ty - p.y) * 0.08; p.vz += (tz - p.z) * 0.06;
-        p.vx *= 0.88; p.vy *= 0.88; p.vz *= 0.88;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+        let tx = p.base_x + (ctx.frame as f32 * 0.01).sin() * act * 0.2;
+        let ty = p.base_y + (ctx.frame as f32 * 0.015).cos() * act * 0.2;
+        let spring = 0.05 + ctx.vram_fill * 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.9; p.vy *= 0.9;
+        p.x += p.vx; p.y += p.vy;
     }
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        // Alternating contour bands (bright/dim rings) in a cool blue-cyan
-        // spectrum, so each concentric circle reads as a separate "region".
-        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
-        // Sinusoidal banding by radius -> crisp alternating rings.
-        let band = 0.5 + 0.5 * (dist * 10.0).cos();
-        let glow = 0.45 + ctx.activity * 0.5;
-        let bright = (0.35 + band * 0.65) * glow;
-        let r = 45.0 * bright + 25.0;
-        let g = (120.0 + 90.0 * bright) * (0.7 + ctx.activity * 0.3);
-        let b = (190.0 + 60.0 * bright) - ctx.activity * 40.0;
-        Some((r, g.min(255.0), b.min(255.0)))
+        let c = (p.base_x + 1.5) / 3.0;
+        Some((c * 255.0, (1.0 - c) * 255.0, 128.0))
     }
 }
 
 struct WavefieldPattern;
 impl Pattern for WavefieldPattern {
     fn name(&self) -> &'static str { "9. Wavefield" }
-    fn extent(&self) -> (f32, f32) { (1.35, 1.35) } // cylinder spread + wave displacement
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let x = (i as f32 / n) * 3.0 - 1.5;
+            let z = ((i as f32 * 0.3).sin()) * 1.5;
+            p.base_x = x; p.base_y = 0.0; p.base_z = z;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        }
+    }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
-        let wave = (p.base_x * 3.0 + t).sin() * (p.base_y * 3.0 + t * 1.3).cos() * act * 0.4;
-        let tx = p.base_x + (p.base_y * 2.0 + t).cos() * act * 0.15;
-        let ty = p.base_y + (p.base_x * 2.0 + t).sin() * act * 0.15;
-        let tz = wave;
-        p.vx += (tx - p.x) * 0.06; p.vy += (ty - p.y) * 0.06; p.vz += (tz - p.z) * 0.06;
-        p.vx *= 0.90; p.vy *= 0.90; p.vz *= 0.90;
+        let tx = p.base_x;
+        let ty = (p.base_x * 3.0 - t * 2.0).sin() * act * 0.5;
+        let tz = p.base_z;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring; p.vz += (tz - p.z) * spring;
+        p.vx *= 0.9; p.vy *= 0.9; p.vz *= 0.9;
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        let c = (p.y + 1.0) / 2.0;
+        Some((0.0, c * 255.0, 255.0))
     }
 }
 
 struct SpiralGalaxyPattern;
 impl Pattern for SpiralGalaxyPattern {
     fn name(&self) -> &'static str { "10. SpiralGalaxy" }
-    fn extent(&self) -> (f32, f32) { (1.6, 1.6) } // disk 1.30 * (1 + act*0.15)
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Re-anchor on a wider disk so the galaxy fills the viewport.
-        // Disk radius 1.30 fills a 16:9 HD screen at the new
-        // aspect-aware scale = min(w,h) * 0.42.
+        let n = particles.len() as f32;
         for (i, p) in particles.iter_mut().enumerate() {
-            let n = PARTICLE_COUNT as f32;
-            // sqrt-distributed radius so the disk has uniform density
-            // (not a bright core with a faint rim).
-            let u = (i as f32 + 0.5) / n;
-            let r = (u.sqrt() * 1.30).max(0.05);
-            let a = (i as f32 * 2.399_963) % std::f32::consts::TAU; // golden-angle
+            let r = (i as f32 / n) * 1.5;
+            let a = (i as f32 * 0.1) + r * 2.0;
             p.base_x = a.cos() * r;
             p.base_y = a.sin() * r;
-            p.base_z = (fastrand::f32() - 0.5) * 0.15;
+            p.base_z = (fastrand::f32() - 0.5) * 0.2;
             p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
             p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-            p.size = 0.6 + fastrand::f32() * 0.6;
         }
     }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
-        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt().max(0.01);
-        let base_angle = p.base_y.atan2(p.base_x);
-        let spiral_offset = dist * 2.5;
-        let rot_speed = 0.3 / (dist + 0.2) * (1.0 + act);
-        let angle = base_angle + t * rot_speed - spiral_offset;
-        let r = dist * (1.0 + act * 0.15);
-        let tx = angle.cos() * r;
-        let ty = angle.sin() * r;
-        let tz = p.base_z + (dist * 4.0 + t).sin() * act * 0.1;
-        p.vx += (tx - p.x) * 0.07; p.vy += (ty - p.y) * 0.07; p.vz += (tz - p.z) * 0.07;
-        p.vx *= 0.89; p.vy *= 0.89; p.vz *= 0.89;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+        let a = t * 0.2 + p.phase;
+        let orbit = act * 0.1;
+        let tx = p.base_x + a.cos() * orbit;
+        let ty = p.base_y + a.sin() * orbit;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.9; p.vy *= 0.9;
+        p.x += p.vx; p.y += p.vy;
     }
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        let t = ctx.frame as f32 * 0.016;
-        let act = ctx.activity;
-        let dist = (p.x * p.x + p.y * p.y).sqrt();
-        let arm_phase = (dist * 3.0 + t).sin() * 0.5 + 0.5;
-        let r = 100.0 + arm_phase * 120.0 + act * 60.0;
-        let g = 60.0 + arm_phase * 140.0;
-        let b = 180.0 + arm_phase * 50.0;
-        Some((r, g, b))
+        let r = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
+        let c = 1.0 - (r / 1.5).clamp(0.0, 1.0);
+        Some((c * 255.0, c * 100.0, 255.0))
     }
 }
 
 struct GridWavePattern;
 impl Pattern for GridWavePattern {
     fn name(&self) -> &'static str { "11. GridWave" }
-    fn extent(&self) -> (f32, f32) { (1.35, 1.35) } // cylinder spread base
-    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
-        let t = ctx.frame as f32 * 0.016;
-        let act = ctx.activity;
-        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
-        let wave = (dist * 6.0 - t * 2.0 * (1.0 + act)).sin() * act * 0.5;
-        let tx = p.base_x; let ty = p.base_y; let tz = wave;
-        p.vx += (tx - p.x) * 0.06; p.vy += (ty - p.y) * 0.06; p.vz += (tz - p.z) * 0.06;
-        p.vx *= 0.89; p.vy *= 0.89; p.vz *= 0.89;
-        p.x += p.vx; p.y += p.vy; p.z += p.vz;
-    }
-}
-
-/// Slot 5: Reactive Image.
-///
-/// The point cloud becomes a "screen" of particles arranged on a grid.
-/// Each particle's anchor position is sampled from a procedural image
-/// (mandala-like sinusoid by default) whose brightness modulates that
-/// particle's z-displacement, color, and size — so an idle GPU shows a
-/// flat dim image, a working GPU pushes pixels outward and warms them up,
-/// and a hot GPU shifts the whole image into the red end of the spectrum.
-///
-/// To swap the source image: edit `image_value(u, v)` below, or — for a
-/// real bitmap source — replace the procedural function with a lookup
-/// into a `[[u8; W]; H]` constant.
-struct ReactiveImagePattern;
-impl Pattern for ReactiveImagePattern {
-    fn name(&self) -> &'static str { "5. ReactiveImage" }
-    fn extent(&self) -> (f32, f32) { (0.85, 0.85) } // grid half-extent 0.60 + rotation + relief
-
-    /// Sample the source image at normalized coordinates (0..1, 0..1).
-    /// Returns brightness 0..1. Replace this body to use a real image.
-    fn image_value(&self, u: f32, v: f32) -> f32 {
-        // Soft mandala: radial symmetric pattern with rotational sweep.
-        let cx = u - 0.5;
-        let cy = v - 0.5;
-        let r = (cx * cx + cy * cy).sqrt();
-        let theta = cy.atan2(cx);
-        let petals = (theta * 6.0).sin() * 0.5 + 0.5;
-        let ring = (r * 18.0).sin() * 0.5 + 0.5;
-        let center_falloff = 1.0 - (r * 2.0).clamp(0.0, 1.0);
-        (petals * 0.4 + ring * 0.5 + center_falloff * 0.3).clamp(0.0, 1.0)
-    }
-
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
-        // Re-anchor every particle onto the image grid the first time the
-        // pattern becomes active (and any subsequent time it's re-selected).
-        let side = (particles.len() as f32).sqrt() as usize;
-        let side = side.max(1);
+        let n = particles.len() as f32;
+        let cols = 20;
         for (i, p) in particles.iter_mut().enumerate() {
-            let u = (i % side) as f32 / side as f32;
-            let v = (i / side) as f32 / side as f32;
-            let brightness = self.image_value(u, v);
-            // Map brightness to a z-displacement that we'll modulate with
-            // telemetry at runtime. Anchor on a centered 1.20×1.20 square
-            // so the image fills a 16:9 HD viewport.
-            let px = (u - 0.5) * 1.20;
-            let py = (v - 0.5) * 1.20;
-            p.base_x = px;
-            p.base_y = py;
-            p.base_z = brightness * 0.4 - 0.2;
-            p.x = px; p.y = py; p.z = p.base_z;
+            let c = i % cols;
+            let r = i / cols;
+            p.base_x = (c as f32 / cols as f32) * 3.0 - 1.5;
+            p.base_y = (r as f32 / (n as usize / cols) as f32) * 3.0 - 1.5;
+            p.base_z = 0.0;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
             p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
-            p.size = 0.4 + brightness * 0.8;
         }
     }
-
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
-        let vfill = ctx.vram_fill;
-        let tfact = ctx.temp_factor;
-
-        // Re-sample brightness each frame so the image can react if you
-        // swap the source later. (Cheap; same arithmetic either way.)
-        let u = p.base_x / 1.20 + 0.5;
-        let v = p.base_y / 1.20 + 0.5;
-        let brightness = self.image_value(
-            u.clamp(0.0, 1.0),
-            v.clamp(0.0, 1.0),
-        );
-
-        // Idle: particles cling to the flat image plane.
-        // Working: VRAM fill pushes the bright pixels outward.
-        // Hot: temperature amplifies the relief.
-        let relief = brightness * (0.15 + vfill * 0.45 + tfact * 0.4);
-        let tz = p.base_z + relief;
-
-        // Idle drift: very loose spring + tiny rotation to keep the image
-        // alive when the GPU is doing nothing.
-        let rotation = t * 0.05 * (0.3 + act);
-        let cos_r = rotation.cos();
-        let sin_r = rotation.sin();
-        let tx = p.base_x * cos_r - p.base_y * sin_r;
-        let ty = p.base_x * sin_r + p.base_y * cos_r;
-
-        // Spring strength scales with activity — tighter when busy.
-        let spring = 0.04 + act * 0.10;
-        p.vx += (tx - p.x) * spring;
-        p.vy += (ty - p.y) * spring;
-        p.vz += (tz - p.z) * spring;
-
-        // Activity-driven jitter — only on the "lit" pixels.
-        let jit = act * 0.002 * brightness;
-        p.vx += p.phase.sin() * jit;
-        p.vy += p.phase.cos() * jit;
-
-        let damp = 0.86 - act * 0.04;
-        p.vx *= damp; p.vy *= damp; p.vz *= damp;
-
+        let tx = p.base_x;
+        let ty = p.base_y;
+        let tz = (p.base_x * 5.0 - t * 2.0).sin() * (p.base_y * 5.0 - t * 2.0).sin() * act * 0.5;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring; p.vz += (tz - p.z) * spring;
+        p.vx *= 0.9; p.vy *= 0.9; p.vz *= 0.9;
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
     }
-
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        let u = p.base_x / 1.20 + 0.5;
-        let v = p.base_y / 1.20 + 0.5;
-        let brightness = self.image_value(
-            u.clamp(0.0, 1.0),
-            v.clamp(0.0, 1.0),
-        );
-        let t = ctx.frame as f32 * 0.016;
-        let act = ctx.activity;
-        let vfill = ctx.vram_fill;
-        let tfact = ctx.temp_factor;
-
-        // Cool image palette: deep indigo → cyan → warm gold as brightness
-        // and telemetry rise.
-        let cool = (40.0, 60.0, 180.0);
-        let mid  = (80.0, 200.0, 220.0);
-        let warm = (255.0, 200.0, 80.0);
-        let hot  = (255.0, 90.0, 40.0);
-
-        // Drive the gradient by combined brightness + activity, then bias
-        // toward "hot" when temperature is high.
-        let mix1 = (brightness * 0.6 + act * 0.3 + vfill * 0.1).clamp(0.0, 1.0);
-        let mix2 = (tfact * 0.7 + act * 0.3).clamp(0.0, 1.0);
-
-        // Two-step lerp: cool → mid by mix1, then mid → warm by mix2,
-        // then warm → hot at high temp.
-        let (r1, g1, b1) = lerp3(cool, mid, mix1);
-        let (r2, g2, b2) = lerp3((r1, g1, b1), warm, mix2);
-        let final_mix = (tfact - 0.6).max(0.0) / 0.4;
-        let (r, g, b) = lerp3((r2, g2, b2), hot, final_mix.clamp(0.0, 1.0));
-
-        // Subtle per-particle shimmer, scaled by brightness.
-        let shimmer = (p.phase + t * 1.5).sin() * 0.1 + 0.9;
-        let scale = (0.6 + brightness * 0.4) * shimmer;
-        Some((r * scale, g * scale, b * scale))
+        Some((100.0, 200.0, 255.0))
     }
-}
-
-fn lerp3(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
-    let t = t.clamp(0.0, 1.0);
-    (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
-}
-
-/// Scale a pattern so its world-space bounding box (given by `extent`, the
-/// max |x| and max |y| its particles reach) maps onto a window of the given
-/// pixel size. Uses the more restrictive axis (min of the two ratios) so the
-/// pattern's extent always touches both edges of the window in at least one
-/// dimension — i.e. it fills the window it occupies. `extent` values are
-/// clamped away from zero so a pathological extent can never blow the scale
-/// up to infinity.
-fn fill_scale(window_w: f32, window_h: f32, extent: (f32, f32)) -> f32 {
-    let wx = extent.0.max(0.001);
-    let wy = extent.1.max(0.001);
-    let w_scale = window_w / (wx * 2.0);
-    let h_scale = window_h / (wy * 2.0);
-    w_scale.min(h_scale)
-}
-
-/// One step of exponential (low-pass) smoothing: move `cur` partway toward
-/// `target`. With `k` in (0, 1) the value asymptotically approaches the
-/// target frame by frame, so a step-wise input (like the 500ms nvidia-smi
-/// poll) is rendered as a smooth glide rather than a hard snap. Never
-/// overwrites `cur` directly, so a step can't jump to `target` in one frame.
-fn smooth_step(cur: f32, target: f32, k: f32) -> f32 {
-    cur + (target - cur) * k.clamp(0.0, 1.0)
 }
 
 struct ChimeraPattern;
 impl Pattern for ChimeraPattern {
     fn name(&self) -> &'static str { "12. Chimera" }
-    fn extent(&self) -> (f32, f32) { (0.55, 1.10) } // face oval rx 0.45, ry 0.975 + smile/amp
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
     fn on_activate(&mut self, particles: &mut [Particle]) {
-        init_chimera_particles(particles);
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let r = (i as f32 / n) * 1.5;
+            let a = (i as f32 * 0.1);
+            p.base_x = a.cos() * r;
+            p.base_y = a.sin() * r;
+            p.base_z = (fastrand::f32() - 0.5) * 1.5;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        }
     }
     fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
         let t = ctx.frame as f32 * 0.016;
         let act = ctx.activity;
-        let vibe: usize = if act < 0.15 { 0 }
-            else if act < 0.50 { 1 }
-            else if act < 0.80 { 2 }
-            else { 3 };
-        let spring = match vibe { 0=>0.01, 1=>0.03, 2=>0.06, _=>0.10 };
-        let amp = match (p.layer, vibe) {
-            (0, _) => 0.0,
-            (1, 0) => 0.005, (1, 1) => 0.012, (1, 2) => 0.025, (1, 3) => 0.05,
-            (_, 0) => 0.008, (_, 1) => 0.015, (_, 2) => 0.030, (_, _) => 0.06,
-        };
-        let freq = match vibe { 0=>1.0, 1=>2.5, 2=>5.0, _=>12.0 };
-        let disp = (t * freq + p.phase).sin() * amp;
-        let tx = p.base_x + disp * 0.5;
-        let ty = p.base_y + disp;
-        if p.layer == 1 && p.base_y > 0.15 && vibe >= 2 {
-            let smile = (p.base_x * 4.0).sin() * 0.02 * (vibe as f32) * 0.5;
-            p.vy += smile;
-        }
-        p.vx += (tx - p.x) * spring;
-        p.vy += (ty - p.y) * spring;
-        p.vz += (p.base_z - p.z) * 0.04;
-        let damp = match vibe { 0=>0.92, 1=>0.88, 2=>0.84, _=>0.78 };
-        p.vx *= damp; p.vy *= damp; p.vz *= damp;
-        let jit = act * 0.003;
-        p.vx += p.phase.sin() * jit;
-        p.vy += p.phase.cos() * jit;
+        let tx = p.base_x + (t * 0.5).sin() * act * 0.2;
+        let ty = p.base_y + (t * 0.5).cos() * act * 0.2;
+        let tz = p.base_z + (t * 0.3).sin() * act * 0.2;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring; p.vz += (tz - p.z) * spring;
+        p.vx *= 0.9; p.vy *= 0.9; p.vz *= 0.9;
         p.x += p.vx; p.y += p.vy; p.z += p.vz;
     }
     fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
-        let act = ctx.activity;
-        let t = ctx.frame as f32 * 0.016;
-        let vibe: usize = if act < 0.15 { 0 }
-            else if act < 0.50 { 1 }
-            else if act < 0.80 { 2 }
-            else { 3 };
-        let shimmer = (p.phase + t * 3.0).sin() * 0.15 + 0.85;
-        let c = match (p.layer, vibe) {
-            (0, _) => (180.0, 180.0, 210.0),
-            (1, 0) => (40.0, 30.0, 80.0),
-            (1, 1) => (60.0, 80.0, 160.0),
-            (1, 2) => (200.0, 140.0, 30.0),
-            (1, 3) => (255.0, 60.0, 120.0),
-            (_, 0) => (30.0, 25.0, 60.0),
-            (_, 1) => (70.0, 100.0, 180.0),
-            (_, 2) => (220.0, 180.0, 50.0),
-            (_, _) => (255.0, 200.0, 20.0),
-        };
-        Some((c.0 * shimmer, c.1 * shimmer, c.2 * shimmer))
+        Some((255.0, 128.0, 64.0))
     }
 }
 
-// ─── Chimera face initialization (extracted free function) ───
+struct ReactiveImagePattern;
+impl Pattern for ReactiveImagePattern {
+    fn name(&self) -> &'static str { "13. ReactiveImage" }
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
+    fn on_activate(&mut self, particles: &mut [Particle]) {
+        let n = particles.len() as f32;
+        for (i, p) in particles.iter_mut().enumerate() {
+            let u = (i % 64) as f32 / 64.0;
+            let v = (i / 64) as f32 / 64.0;
+            p.base_x = u * 3.0 - 1.5;
+            p.base_y = v * 3.0 - 1.5;
+            p.base_z = 0.0;
+            p.x = p.base_x; p.y = p.base_y; p.z = p.base_z;
+            p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        }
+    }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let t = ctx.frame as f32 * 0.016;
+        let act = ctx.activity;
+        let tx = p.base_x + (t * 0.5).sin() * act * 0.1;
+        let ty = p.base_y + (t * 0.5).cos() * act * 0.1;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.9; p.vy *= 0.9;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        let u = (p.base_x + 1.5) / 3.0;
+        let v = (p.base_y + 1.5) / 3.0;
+        Some((u * 255.0, v * 255.0, 128.0))
+    }
+}
 
-fn init_chimera_particles(particles: &mut [Particle]) {
-    // Multiplier on every position so the face fills a 16:9 HD
-    // viewport (was 1.0 → face oval 0.60×1.50; now 1.5× → 0.90×2.25).
-    const FILL: f32 = 1.5;
-    let n = particles.len();
+struct CustomPattern;
+impl Pattern for CustomPattern {
+    fn name(&self) -> &'static str { "14. Custom" }
+    fn extent(&self) -> (f32, f32) { (1.5, 1.5) }
+    fn update(&mut self, _p: &mut Particle, _ctx: &PatternCtx) {}
+}
+
+// ─── GnomeWorx chip patterns ───
+//
+// A family of CUDA-core monitoring patterns built around a central
+// "GnomeWorx chip": a square die with IC leads (pins) around the border.
+// Every pattern re-anchors onto the same chip silhouette (so the whole
+// set reads as one coherent brand motif) but animates it differently.
+// Selectable with number keys 1-0.
+//
+// layer 0 = die body, layer 2 = border pins, layer 3 = die border ring.
+
+const CHIP_DIE_HALF: f32 = 0.50;
+
+/// Anchor every particle onto the central GnomeWorx chip silhouette:
+/// a square die, a bright die-border ring (the frame), and IC leads
+/// (pins) radiating out from all four edges — the "chip border". The
+/// border ring and pins are given extra weight so the chip reads as
+/// clearly framed.
+fn anchor_chip(particles: &mut [Particle]) {
+    let n = particles.len() as f32;
     for (i, p) in particles.iter_mut().enumerate() {
-        let frac = i as f32 / n as f32;
-        let (tx, ty, layer): (f32, f32, u8) = if frac < 0.10 {
-            let a = frac / 0.10 * std::f32::consts::TAU * 2.5;
-            let outline = face_outline(a);
-            (outline.0 * FILL, outline.1 * FILL, 0)
-        } else if frac < 0.35 {
-            let of = (frac - 0.10) / 0.25;
-            if of < 0.5 {
-                let eye_frac = of * 2.0;
-                let eye_x = if eye_frac < 0.5 {
-                    -0.18 * FILL + (fastrand::f32() - 0.5) * 0.18 * FILL
-                } else {
-                    0.18 * FILL + (fastrand::f32() - 0.5) * 0.18 * FILL
-                };
-                let eye_y = -0.05 * FILL + (fastrand::f32() - 0.5) * 0.12 * FILL;
-                (eye_x, eye_y, 1)
-            } else {
-                let mf = (of - 0.5) * 2.0;
-                let mx = (mf - 0.5) * 0.40 * FILL;
-                let my = 0.20 * FILL + (fastrand::f32() - 0.5) * 0.08 * FILL;
-                (mx, my, 1)
-            }
+        let fr = i as f32 / n;
+        let (bx, by, layer) = if fr < 0.50 {
+            // Die body: even 2D square fill. Two INDEPENDENT irrational
+            // seeds (phi ~0.618 and sqrt2-1 ~0.414) so the scatter is a
+            // true 2D fill — NOT a collapsed diagonal (0.618+0.382=1
+            // made u and v complementary into a line).
+            let u = (i as f32 * 0.618_033_9887).fract();
+            let v = (i as f32 * 0.414_213_5624).fract();
+            ((u * 2.0 - 1.0) * CHIP_DIE_HALF, (v * 2.0 - 1.0) * CHIP_DIE_HALF, 0u8)
+        } else if fr < 0.66 {
+            // Die border: a bright SQUARE frame hugging the die edge,
+            // so the chip reads as clearly bordered. 16% gives enough
+            // particles for a CONTINUOUS THIN line along each edge.
+            let e = (fr - 0.50) / 0.16;
+            let seg = (e * 4.0) as usize % 4;
+            let along = (e * 4.0).fract() * 2.0 - 1.0; // -1..1
+            let r = CHIP_DIE_HALF * 0.99;
+            let (bx, by) = match seg {
+                0 => ( along * r,  r), // top edge (rightward)
+                1 => ( r, -along * r), // right edge (downward)
+                2 => (-along * r, -r), // bottom edge (leftward)
+                _ => (-r,  along * r), // left edge (upward)
+            };
+            (bx, by, 3u8)
         } else {
-            let _tf = (frac - 0.35) / 0.65;
-            loop {
-                let rx = (fastrand::f32() - 0.5) * 0.55 * FILL;
-                let ry = (fastrand::f32() - 0.5) * 0.75 * FILL;
-                let e = (rx / (0.30 * FILL)).powi(2) + (ry / (0.65 * FILL)).powi(2);
-                if e <= 1.0 { break (rx, ry, 2); }
-            }
+            // Border pins: long leads radiating out from each edge.
+            let e = (fr - 0.66) / 0.34;
+            let side = (e * 4.0) as usize % 4;
+            let along = (e * 4.0).fract();
+            let pin_len = CHIP_DIE_HALF * 0.80;
+            let span = CHIP_DIE_HALF * 0.98;
+            let (ex, ey, dx, dy) = match side {
+                0 => ( CHIP_DIE_HALF, (along * 2.0 - 1.0) * span,  pin_len, 0.0),
+                1 => ((along * 2.0 - 1.0) * span,  CHIP_DIE_HALF, 0.0,  pin_len),
+                2 => (-CHIP_DIE_HALF, (along * 2.0 - 1.0) * span, -pin_len, 0.0),
+                _ => ((along * 2.0 - 1.0) * span, -CHIP_DIE_HALF, 0.0, -pin_len),
+            };
+            let t = fastrand::f32();
+            (ex + dx * t, ey + dy * t, 2u8)
         };
-        p.base_x = tx; p.base_y = ty;
-        p.base_z = (fastrand::f32() - 0.5) * 0.1;
-        p.x = tx; p.y = ty; p.z = p.base_z;
-        p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        // Particle size by layer: the die body uses larger dots so the
+        // square fills densely into a solid violet die; the die border is
+        // deliberately SLIM so the chip package reads as a thin crisp
+        // frame (a real IC substrate has a hairline silver edge). Pins
+        // stay finer still.
         p.size = match layer {
-            0 => 1.0 + fastrand::f32() * 0.6,
-            1 => 0.6 + fastrand::f32() * 0.6,
-            _ => 0.3 + fastrand::f32() * 0.6,
+            0 => 3.0,
+            3 => 1.8,
+            _ => 2.0,
         };
+        p.base_x = bx; p.base_y = by; p.base_z = 0.0;
+        p.x = bx; p.y = by; p.z = 0.0;
+        p.vx = 0.0; p.vy = 0.0; p.vz = 0.0;
+        p.phase = (i % 64) as f32 * 0.098;
         p.layer = layer;
     }
 }
 
-fn face_outline(t: f32) -> (f32, f32) {
-    let a = t.rem_euclid(std::f32::consts::TAU);
-    let rx = 0.30;
-    let chin = if a > std::f32::consts::PI * 0.5 && a < std::f32::consts::PI * 1.5 {
-        let bf = ((a - std::f32::consts::PI * 0.5) / std::f32::consts::PI).clamp(0.0, 1.0);
-        rx * (1.0 - bf * 0.4)
-    } else {
-        rx
-    };
-    let ry = 0.65;
-    (chin * a.cos(), ry * a.sin() + 0.02)
+/// GnomeWorx chip palette: violet die, bright die-border ring, copper
+/// pins. All brighten with GPU activity; the die also shifts with VRAM
+/// fill and temperature so the chip reads as "working". The border ring
+/// and pins are kept high-contrast so the chip is clearly framed.
+fn chip_color(p: &Particle, ctx: &PatternCtx) -> (f32, f32, f32) {
+    let act = ctx.activity;
+    let vfill = ctx.vram_fill;
+    let tfact = ctx.temp_factor;
+    let flicker = 0.9 + (p.phase * 9.0 + ctx.frame as f32 * 0.05).sin() * 0.1;
+    match p.layer {
+        0 => {
+            let r = (90.0 + act * 60.0 + vfill * 30.0) * flicker;
+            let g = (40.0 + act * 30.0) * flicker;
+            let b = (200.0 + act * 55.0 + tfact * 20.0) * flicker;
+            (r, g, b)
+        }
+        3 => {
+            // Die border ring: bright cyan-white frame.
+            let r = (150.0 + act * 60.0) * flicker;
+            let g = (220.0 + act * 35.0) * flicker;
+            let b = (255.0) * flicker;
+            (r, g, b)
+        }
+        _ => {
+            // Pins: bright gold, glowing with activity.
+            let r = (255.0) * flicker;
+            let g = (200.0 + act * 55.0) * flicker;
+            let b = (90.0 + act * 30.0) * flicker;
+            (r, g, b)
+        }
+    }
 }
 
-// ─── main app state ───
+/// 1. ChipCore — the resting chip: a gentle shimmer over the die and
+/// pins, intensifying as the GPU works.
+struct ChipCorePattern;
+impl Pattern for ChipCorePattern {
+    fn name(&self) -> &'static str { "1. ChipCore" }
+    fn extent(&self) -> (f32, f32) { (1.0, 1.0) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let jx = (t * 1.2 + p.phase * 3.0).sin() * act * 0.02;
+        let jy = (t * 1.4 + p.phase * 2.0).cos() * act * 0.02;
+        let tx = p.base_x + jx;
+        let ty = p.base_y + jy;
+        let spring = 0.10;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
 
+/// 2. ChipPulse — the whole chip breathes: the die swells and
+/// contracts with GPU activity, like a beating processor heart.
+struct ChipPulsePattern;
+impl Pattern for ChipPulsePattern {
+    fn name(&self) -> &'static str { "2. ChipPulse" }
+    fn extent(&self) -> (f32, f32) { (1.0, 1.0) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let pulse = 1.0 + (t * 2.0 + p.phase).sin() * act * 0.15;
+        let tx = p.base_x * pulse;
+        let ty = p.base_y * pulse;
+        let spring = 0.08;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 3. ChipOrbit — CUDA cores circle the chip like electrons, the orbit
+/// radius and speed growing with GPU load.
+struct ChipOrbitPattern;
+impl Pattern for ChipOrbitPattern {
+    fn name(&self) -> &'static str { "3. ChipOrbit" }
+    fn extent(&self) -> (f32, f32) { (1.3, 1.3) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let a = t * (0.3 + act * 0.5) + p.phase;
+        let orbit = 0.15 + act * 0.25;
+        let tx = p.base_x + a.cos() * orbit;
+        let ty = p.base_y + a.sin() * orbit;
+        let spring = 0.06;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.88; p.vy *= 0.88;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 4. ChipGrid — the die is a grid of CUDA cores; each cell lights up
+/// with activity, a wave of computation sweeping across the chip.
+struct ChipGridPattern;
+impl Pattern for ChipGridPattern {
+    fn name(&self) -> &'static str { "4. ChipGrid" }
+    fn extent(&self) -> (f32, f32) { (1.0, 1.0) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        // A travelling wave across the die; pins stay anchored.
+        let wave = if p.layer == 0 {
+            (p.base_x * 6.0 - t * 2.0).sin() * act * 0.10
+        } else { 0.0 };
+        let tx = p.base_x;
+        let ty = p.base_y + wave;
+        let spring = 0.08;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        // Grid cells: brighten a cell based on its position and activity.
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let cell = ((p.base_x * 6.0 - t * 2.0).sin() * 0.5 + 0.5) * act;
+        let (r, g, b) = chip_color(p, ctx);
+        Some((r + cell * 60.0, g + cell * 40.0, b + cell * 20.0))
+    }
+}
+
+/// 5. ChipWave — a ripple travels across the die surface, like heat
+/// shimmering off a working processor.
+struct ChipWavePattern;
+impl Pattern for ChipWavePattern {
+    fn name(&self) -> &'static str { "5. ChipWave" }
+    fn extent(&self) -> (f32, f32) { (1.0, 1.0) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
+        let ripple = (dist * 8.0 - t * 3.0).sin() * act * 0.12;
+        let tx = p.base_x;
+        let ty = p.base_y + ripple;
+        let spring = 0.08;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 6. ChipBreathe — the whole chip scales in and out with GPU load,
+/// a slow, massy inhale/exhale.
+struct ChipBreathePattern;
+impl Pattern for ChipBreathePattern {
+    fn name(&self) -> &'static str { "6. ChipBreathe" }
+    fn extent(&self) -> (f32, f32) { (1.1, 1.1) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let breathe = 1.0 + (t * 0.8 + p.phase).sin() * act * 0.12;
+        let tx = p.base_x * breathe;
+        let ty = p.base_y * breathe;
+        let spring = 0.07;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 7. ChipSpiral — cores spiral inward toward the chip centre, the
+/// spiral tightening as the GPU ramps up.
+struct ChipSpiralPattern;
+impl Pattern for ChipSpiralPattern {
+    fn name(&self) -> &'static str { "7. ChipSpiral" }
+    fn extent(&self) -> (f32, f32) { (1.2, 1.2) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let a = t * (0.4 + act * 0.6) + p.phase;
+        let pull = 0.02 + act * 0.05;
+        let tx = p.base_x + a.cos() * pull;
+        let ty = p.base_y + a.sin() * pull;
+        let spring = 0.06;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.88; p.vy *= 0.88;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 8. ChipRings — concentric rings radiate outward from the chip,
+/// like a signal broadcast from the processor.
+struct ChipRingsPattern;
+impl Pattern for ChipRingsPattern {
+    fn name(&self) -> &'static str { "8. ChipRings" }
+    fn extent(&self) -> (f32, f32) { (1.3, 1.3) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let dist = (p.base_x * p.base_x + p.base_y * p.base_y).sqrt();
+        let ring = (dist * 6.0 - t * 2.0).sin() * act * 0.10;
+        let tx = p.base_x;
+        let ty = p.base_y + ring;
+        let spring = 0.08;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.85; p.vy *= 0.85;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 9. ChipStorm — a storm of particles swirls around the chip, the
+/// vortex tightening and speeding with GPU load.
+struct ChipStormPattern;
+impl Pattern for ChipStormPattern {
+    fn name(&self) -> &'static str { "9. ChipStorm" }
+    fn extent(&self) -> (f32, f32) { (1.4, 1.4) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        let t = ctx.frame as f32 * 0.016;
+        let a = t * (0.5 + act * 0.8) + p.phase;
+        let swirl = 0.10 + act * 0.20;
+        let tx = p.base_x + a.cos() * swirl;
+        let ty = p.base_y + a.sin() * swirl;
+        let spring = 0.05;
+        p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+        p.vx *= 0.88; p.vy *= 0.88;
+        p.x += p.vx; p.y += p.vy;
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+/// 0. ChipMatrix — a matrix-style rain of cores falls within the chip
+/// border, the fall speeding up as the GPU works.
+struct ChipMatrixPattern;
+impl Pattern for ChipMatrixPattern {
+    fn name(&self) -> &'static str { "0. ChipMatrix" }
+    fn extent(&self) -> (f32, f32) { (1.0, 1.0) }
+    fn on_activate(&mut self, particles: &mut [Particle]) { anchor_chip(particles); }
+    fn update(&mut self, p: &mut Particle, ctx: &PatternCtx) {
+        let act = ctx.activity;
+        // Die-body cores fall downward (screen-down = +y) and reset at the
+        // top; border ring and pins stay anchored.
+        if p.layer == 0 {
+            let fall = 0.0006 + act * 0.0012;
+            p.vy += fall;
+            p.vy *= 0.99;
+            p.x += p.vx; p.y += p.vy;
+            if p.y > CHIP_DIE_HALF {
+                p.y = -CHIP_DIE_HALF;
+                p.x = p.base_x;
+                p.vx = (fastrand::f32() - 0.5) * 0.002;
+                p.vy = 0.0;
+            }
+        } else {
+            let tx = p.base_x;
+            let ty = p.base_y;
+            let spring = 0.10;
+            p.vx += (tx - p.x) * spring; p.vy += (ty - p.y) * spring;
+            p.vx *= 0.85; p.vy *= 0.85;
+            p.x += p.vx; p.y += p.vy;
+        }
+    }
+    fn color(&self, p: &Particle, ctx: &PatternCtx) -> Option<(f32, f32, f32)> {
+        Some(chip_color(p, ctx))
+    }
+}
+
+// ─── Missing definitions (recovered) ───
+#[derive(Clone)]
 struct ProcessInfo {
     pid: u32,
     name: String,
@@ -1003,42 +971,39 @@ struct ProcessInfo {
     model: String,
 }
 
-// ─── runtime config ───
-//
-// Tunables read from environment variables at startup so Monitor² (or any
-// launcher) can parameterise the visual without editing or rebuilding the
-// source. Defaults reproduce the original tuned behaviour exactly.
-//
-//   CUDA_MONITOR_MAX_SPIN   max rotation coefficient (default 0.015)
-//   CUDA_MONITOR_LIGHTNING  lightning intensity multiplier, 0.0..3.0
-//                           (default 1.0; 0 disables lightning entirely)
-#[derive(Clone, Copy)]
 struct Config {
-    max_rotation: f32,
+    max_speed: f32,
     lightning: f32,
+    max_rotation: f32,
+    // When true the window is locked in place (no drag-to-move) so it
+    // stays pinned behind the gauges. Set PIN=0 in the env to allow
+    // dragging again without a rebuild.
+    pinned: bool,
 }
 
 impl Config {
     fn from_env() -> Self {
-        fn env_f(name: &str, default: f32) -> f32 {
-            std::env::var(name)
-                .ok()
-                .and_then(|v| v.trim().parse::<f32>().ok())
-                .filter(|v| v.is_finite())
-                .unwrap_or(default)
-        }
+        // Defaults
         Config {
-            max_rotation: env_f("CUDA_MONITOR_MAX_SPEED", 0.015),
-            lightning: env_f("CUDA_MONITOR_LIGHTNING", 1.0).max(0.0),
+            max_speed: 0.015,
+            lightning: 1.0,
+            max_rotation: 0.0004,
+            pinned: std::env::var("PIN").map(|v| v != "0").unwrap_or(true),
         }
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self { max_rotation: 0.015, lightning: 1.0 }
-    }
+fn smooth_step(current: f32, target: f32, k: f32) -> f32 {
+    current + (target - current) * k
 }
+
+fn fill_scale(win_w: f32, win_h: f32, extent: (f32, f32)) -> f32 {
+    let (ex, ey) = extent;
+    let sx = if win_w > 0.0 { win_w / (ex * 2.0) } else { 1.0 };
+    let sy = if win_h > 0.0 { win_h / (ey * 2.0) } else { 1.0 };
+    sx.min(sy)
+}
+
 
 struct VramVisualizer {
     // UI state: whether the footer context popup is currently shown.
@@ -1085,12 +1050,20 @@ impl VramVisualizer {
             .map(init_particle_cylinder)
             .collect();
         // Build the registry. Order here is the Tab cycle order.
-        // Slot 5 (index 4) is ReactiveImage — the new extensible pattern.
-        // Restrict to only the OrbitCube pattern (pattern 3).
+        // Number keys 1-0 select the GnomeWorx chip patterns (indices 0-9);
+        // OrbitCube stays reachable at the end of the Tab cycle.
         let patterns: Vec<Box<dyn Pattern>> = vec![
+            Box::new(ChipCorePattern),
+            Box::new(ChipPulsePattern),
+            Box::new(ChipOrbitPattern),
+            Box::new(ChipGridPattern),
+            Box::new(ChipWavePattern),
+            Box::new(ChipBreathePattern),
+            Box::new(ChipSpiralPattern),
+            Box::new(ChipRingsPattern),
+            Box::new(ChipStormPattern),
+            Box::new(ChipMatrixPattern),
             Box::new(OrbitCubePattern),
-            Box::new(NebulaPattern),
-            Box::new(SpherePattern),
         ];
         let mut s = Self {
             show_footer_popup: false,
@@ -1269,21 +1242,39 @@ impl eframe::App for VramVisualizer {
                     self.next_pattern();
                 }
                 if let egui::Event::Key { key, pressed: true, .. } = ev {
+                    // Window stacking: B = send to back (behind the gauges),
+                    // F = bring to front. Useful because the window is
+                    // frameless/transparent and may overlap the Groucho gauges.
+                    match key {
+                        egui::Key::B => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                                egui::WindowLevel::AlwaysOnBottom,
+                            ));
+                            continue;
+                        }
+                        egui::Key::F => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                                egui::WindowLevel::Normal,
+                            ));
+                            continue;
+                        }
+                        _ => {}
+                    }
                     let new_idx = match key {
-                        egui::Key::Num1 => Some(0),  // 1. Vortex
-                        egui::Key::Num2 => Some(1),  // 2. Cylinder
-                        egui::Key::Num3 => Some(2),  // 3. OrbitCube
-                        egui::Key::Num4 => Some(3),  // 4. ProcessCloud
-                        egui::Key::Num5 => Some(4),  // 5. ReactiveImage
-                        egui::Key::Num6 => Some(5),  // 6. Animation
-                        egui::Key::Num7 => Some(6),  // 7. HeatScale
-                        egui::Key::Num8 => Some(7),  // 8. Regions
-                        egui::Key::Num9 => Some(8),  // 9. Wavefield
-                        egui::Key::Num0 => Some(9),  // 10. SpiralGalaxy
-                        egui::Key::Minus => Some(10), // 11. GridWave
-                        egui::Key::Equals => Some(11), // 12. Chimera
-                        egui::Key::N => Some(1),  // N. Nebula (index 1)
-                        egui::Key::S => Some(2),  // S. Sphere (index 2)
+                        egui::Key::Num1 => Some(0),  // 1. ChipCore
+                        egui::Key::Num2 => Some(1),  // 2. ChipPulse
+                        egui::Key::Num3 => Some(2),  // 3. ChipOrbit
+                        egui::Key::Num4 => Some(3),  // 4. ChipGrid
+                        egui::Key::Num5 => Some(4),  // 5. ChipWave
+                        egui::Key::Num6 => Some(5),  // 6. ChipBreathe
+                        egui::Key::Num7 => Some(6),  // 7. ChipSpiral
+                        egui::Key::Num8 => Some(7),  // 8. ChipRings
+                        egui::Key::Num9 => Some(8),  // 9. ChipStorm
+                        egui::Key::Num0 => Some(9),  // 0. ChipMatrix
+                        egui::Key::Minus => Some(10), // - OrbitCube
+                        egui::Key::Equals => Some(11), // = (reserved)
+                        egui::Key::N => Some(1),  // N. ChipPulse (index 1)
+                        egui::Key::S => Some(2),  // S. ChipOrbit (index 2)
                         _ => None,
                     };
                     if let Some(idx) = new_idx { self.switch_to(idx); }
@@ -1517,6 +1508,28 @@ impl eframe::App for VramVisualizer {
                     });
                 }
             });
+
+            // Dragging: pick the window up only when the pointer is first
+            // pressed (edge-triggered) AND actually moved — so a plain click
+            // doesn't grab it, and a held button doesn't keep re-engaging
+            // the drag (which would glue the window to the mouse and make it
+            // unable to release).
+            // When PINNED, drag-to-move is disabled so the window stays
+            // locked in place behind the gauges. A click still grabs focus
+            // so the 1-0 pattern keys reach the window.
+            let drag_started = ctx.input(|i| {
+                !self.cfg.pinned && i.pointer.primary_pressed() && i.pointer.delta().length() > 1.0
+            });
+            if drag_started {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // Grab keyboard focus on any click so the B/F/1-0 keys reach the
+            // window. A transparent frameless overlay is not focused by
+            // default on Wayland, so without this the key events never arrive.
+            let clicked = ctx.input(|i| i.pointer.primary_pressed());
+            if clicked {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
         });
         ctx.request_repaint();
     }
@@ -1661,6 +1674,7 @@ fn main() -> eframe::Result<()> {
             .with_max_inner_size([3840.0, 2160.0])
             .with_resizable(true)
             .with_transparent(true)
+            .with_decorations(false)
             .with_title("VRAM Point Cloud"),
         ..Default::default()
     };
@@ -1924,11 +1938,27 @@ mod ad_hoc_verify {
     }
 
     #[test]
-    fn reactive_image_is_at_slot_five() {
+    fn chip_patterns_occupy_number_key_slots() {
+        // Number keys 1-0 must select the GnomeWorx chip patterns at
+        // indices 0-9, in order. This pins the hotkey mapping.
         let v = VramVisualizer::new();
-        assert_eq!(v.patterns[4].name(), "5. ReactiveImage",
-            "slot 5 (index 4) must be ReactiveImage, got: {}",
-            v.patterns[4].name());
+        let expected = [
+            "1. ChipCore",
+            "2. ChipPulse",
+            "3. ChipOrbit",
+            "4. ChipGrid",
+            "5. ChipWave",
+            "6. ChipBreathe",
+            "7. ChipSpiral",
+            "8. ChipRings",
+            "9. ChipStorm",
+            "0. ChipMatrix",
+        ];
+        for (i, name) in expected.iter().enumerate() {
+            assert_eq!(v.patterns[i].name(), *name,
+                "slot {i} (key {}) must be {name}, got: {}",
+                if i == 9 { 0 } else { i + 1 }, v.patterns[i].name());
+        }
     }
 
     #[test]
@@ -1999,14 +2029,15 @@ mod ad_hoc_verify {
     #[test]
     fn switch_to_re_anchors_and_changes_particle_state() {
         let mut v = VramVisualizer::new();
-        // Default active is Chimera (index 12). Switch to ReactiveImage.
-        v.switch_to(4);
-        assert_eq!(v.active_idx, 4);
-        assert_eq!(v.current_name(), "5. ReactiveImage");
-        // Particles should now be on the HD grid (base_x in [-0.6, 0.6]).
+        // Default active is ChipCore (index 0). Switch to ChipPulse (index 1).
+        v.switch_to(1);
+        assert_eq!(v.active_idx, 1);
+        assert_eq!(v.current_name(), "2. ChipPulse");
+        // Particles should now be anchored onto the chip die (base_x in
+        // [-0.5, 0.5]).
         let first_base_x = v.particles[0].base_x;
-        assert!(first_base_x.abs() <= 0.62,
-            "first particle should be on the image grid, base_x={first_base_x}");
+        assert!(first_base_x.abs() <= 0.52,
+            "first particle should be on the chip die, base_x={first_base_x}");
     }
 
     #[test]
@@ -2044,18 +2075,18 @@ mod ad_hoc_verify {
     fn register_pattern_adds_at_runtime() {
         struct CustomPattern;
         impl Pattern for CustomPattern {
-            fn name(&self) -> &'static str { "99. Custom" }
+                fn name(&self) -> &'static str { "14. Custom" }
             fn update(&mut self, _p: &mut Particle, _ctx: &PatternCtx) {}
         }
         let mut v = VramVisualizer::new();
         let initial_len = v.patterns.len();
         let idx = v.register_pattern(Box::new(CustomPattern));
         assert_eq!(idx, initial_len, "new pattern should get the next index");
-        assert_eq!(v.patterns[idx].name(), "99. Custom");
+        assert_eq!(v.patterns[idx].name(), "14. Custom");
         // Should be reachable.
         v.switch_to(idx);
         assert_eq!(v.active_idx, idx);
-        assert_eq!(v.current_name(), "99. Custom");
+        assert_eq!(v.current_name(), "14. Custom");
     }
 
     #[test]
@@ -2290,16 +2321,38 @@ mod ad_hoc_verify {
     }
 
     #[test]
-    fn chimera_init_fills_face_oval_for_hd() {
+    fn chip_anchor_forms_die_ring_and_border_pins() {
+        // The GnomeWorx chip silhouette must place particles in three
+        // distinct regions: the square die (|x|,|y| <= 0.5), the bright
+        // die-border ring (layer 3, hugging the die edge), and border
+        // pins (|x| or |y| > 0.5). No gear emblem (removed).
         let mut particles = vec![make_p(0.0, 0.0, 0.0, 0); PARTICLE_COUNT];
-        init_chimera_particles(&mut particles);
-        let max_abs_x = particles.iter().map(|p| p.base_x.abs()).fold(0.0_f32, f32::max);
-        let max_abs_y = particles.iter().map(|p| p.base_y.abs()).fold(0.0_f32, f32::max);
-        // Chimera FILL = 1.5 → face oval 0.45 wide × 0.975 tall.
-        assert!(max_abs_x > 0.40,
-            "Chimera face should reach |x| > 0.40 (was 0.30 before HD fill), got {max_abs_x}");
-        assert!(max_abs_y > 0.90,
-            "Chimera face should reach |y| > 0.90 (was 0.65 before HD fill), got {max_abs_y}");
+        anchor_chip(&mut particles);
+        let mut die = 0usize;
+        let mut ring = 0usize;
+        let mut pins = 0usize;
+        for q in &particles {
+            match q.layer {
+                0 => die += 1,
+                3 => ring += 1,
+                _ => pins += 1,
+            }
+        }
+        // Roughly 50% die, 16% border ring, 34% pins.
+        let n = PARTICLE_COUNT as f32;
+        assert!((die as f32 / n - 0.50).abs() < 0.05, "die share wrong: {die}");
+        assert!((ring as f32 / n - 0.16).abs() < 0.03, "ring share wrong: {ring}");
+        assert!((pins as f32 / n - 0.34).abs() < 0.05, "pins share wrong: {pins}");
+        // Die particles stay inside the die; pins extend past the border.
+        for q in &particles {
+            if q.layer == 0 {
+                assert!(q.base_x.abs() <= 0.51 && q.base_y.abs() <= 0.51,
+                    "die particle escaped: ({}, {})", q.base_x, q.base_y);
+            } else if q.layer == 2 {
+                assert!(q.base_x.abs() > 0.49 || q.base_y.abs() > 0.49,
+                    "pin particle not on the border: ({}, {})", q.base_x, q.base_y);
+            }
+        }
     }
 
     #[test]
@@ -2342,68 +2395,147 @@ mod ad_hoc_verify {
     }
 
     #[test]
-    fn nebula_anchors_fills_viewport_and_stays_finite() {
-        // 13.Nebula must re-anchor onto a wide gas cloud (fills the
-        // viewport), and its physics must keep every particle at finite
-        // positions across many frames at high activity (no blow-up).
-        let mut p = NebulaPattern;
-        let mut particles: Vec<Particle> = (0..PARTICLE_COUNT).map(|i| init_particle_cylinder(i)).collect();
-        p.on_activate(&mut particles);
-
-        // Fills the viewport: max radius should reach ~1.5.
-        let max_r = particles.iter()
-            .map(|q| (q.base_x.powi(2) + q.base_y.powi(2)).sqrt())
-            .fold(0.0_f32, f32::max);
-        assert!(max_r > 1.2,
-            "Nebula should fill the viewport, got max_r={max_r}");
-
-        // Physics stays finite and bounded under sustained high load.
+    fn chip_patterns_stay_finite_and_bounded() {
+        // Every GnomeWorx chip pattern must keep every particle at finite
+        // positions across many frames at high activity (no blow-up), and
+        // stay within a bounded region around the chip.
+        let mut patterns: Vec<Box<dyn Pattern>> = vec![
+            Box::new(ChipCorePattern),
+            Box::new(ChipPulsePattern),
+            Box::new(ChipOrbitPattern),
+            Box::new(ChipGridPattern),
+            Box::new(ChipWavePattern),
+            Box::new(ChipBreathePattern),
+            Box::new(ChipSpiralPattern),
+            Box::new(ChipRingsPattern),
+            Box::new(ChipStormPattern),
+            Box::new(ChipMatrixPattern),
+        ];
         let c = PatternCtx { frame: 0, activity: 1.0, vram_fill: 1.0, temp_factor: 1.0 };
-        for _ in 0..300 {
-            for q in &mut particles {
-                p.update(q, &c);
+        for pat in patterns.iter_mut() {
+            let mut particles: Vec<Particle> = (0..PARTICLE_COUNT).map(|i| init_particle_cylinder(i)).collect();
+            pat.on_activate(&mut particles);
+            for _ in 0..300 {
+                for q in &mut particles {
+                    pat.update(q, &c);
+                }
+            }
+            for q in &particles {
+                assert!(q.x.is_finite() && q.y.is_finite() && q.z.is_finite(),
+                    "{} produced a non-finite position", pat.name());
+                assert!(q.x.abs() < 10.0 && q.y.abs() < 10.0 && q.z.abs() < 10.0,
+                    "{} particle escaped bounds: ({}, {}, {})", pat.name(), q.x, q.y, q.z);
             }
         }
-        for q in &particles {
-            assert!(q.x.is_finite() && q.y.is_finite() && q.z.is_finite(),
-                "Nebula produced a non-finite position");
-            assert!(q.x.abs() < 10.0 && q.y.abs() < 10.0 && q.z.abs() < 10.0,
-                "Nebula particle escaped bounds: ({}, {}, {})", q.x, q.y, q.z);
-        }
-        // Distinct name so it's not a silent duplicate.
-        assert_eq!(p.name(), "13. Nebula");
     }
 
     #[test]
-    fn sphere_anchors_on_surface_and_stays_finite() {
-        // 14.Sphere must re-anchor particles onto a sphere surface (all at
-        // radius ~1.0, uniform density), and its physics must keep every
-        // particle finite and bounded under sustained high load.
-        let mut p = SpherePattern;
-        let mut particles: Vec<Particle> = (0..PARTICLE_COUNT).map(|i| init_particle_cylinder(i)).collect();
-        p.on_activate(&mut particles);
+    fn chip_color_responds_to_activity() {
+        // The chip palette must brighten with GPU activity: a hot, busy
+        // chip should be visibly brighter than an idle one.
+        let p = ChipCorePattern;
+        let particle = make_p(0.0, 0.0, 0.0, 0);
+        let idle = PatternCtx { frame: 0, activity: 0.0, vram_fill: 0.0, temp_factor: 0.0 };
+        let busy = PatternCtx { frame: 0, activity: 1.0, vram_fill: 1.0, temp_factor: 1.0 };
+        let (ir, ig, ib) = p.color(&particle, &idle).unwrap();
+        let (br, bg, bb) = p.color(&particle, &busy).unwrap();
+        let delta = (br - ir).abs() + (bg - ig).abs() + (bb - ib).abs();
+        assert!(delta > 20.0,
+            "activity should brighten the chip palette, got delta={delta} \
+             (idle=({ir},{ig},{ib}) busy=({br},{bg},{bb}))");
+    }
 
-        // All particles sit on the sphere surface: radius ≈ 1.0.
-        for q in &particles {
-            let r = (q.base_x.powi(2) + q.base_y.powi(2) + q.base_z.powi(2)).sqrt();
-            assert!((r - 1.0).abs() < 0.01,
-                "Sphere particle should sit on radius 1.0, got r={r}");
-        }
+    /// Offscreen-render the ChipCore pattern to a PPM so the chip motif
+    /// (square die, border ring, gold pins) can be verified visibly.
+    /// Maps particles exactly as the on-screen painter does.
+    #[test]
+    fn chip_core_renders_a_framed_die_to_ppm() {
+        let w: usize = 800;
+        let h: usize = 800;
+        // Big RGBA buffer, premultiplied dark background.
+        let mut buf = vec![0u8; w * h * 4];
+        // (r,g,b,a) as f32 accumulator per pixel to model alpha over black.
+        let mut acc = vec![0.0f32; w * h * 4];
+        let mut particles: Vec<Particle> =
+            (0..PARTICLE_COUNT).map(init_particle_cylinder).collect();
+        let mut pat = ChipCorePattern;
+        pat.on_activate(&mut particles);
 
-        // Physics stays finite and bounded under sustained high load.
-        let c = PatternCtx { frame: 0, activity: 1.0, vram_fill: 1.0, temp_factor: 1.0 };
-        for _ in 0..300 {
-            for q in &mut particles {
-                p.update(q, &c);
+        let (wx, wy) = pat.extent();
+        let scale = fill_scale(w as f32, h as f32, (wx, wy));
+        let cx = w as f32 / 2.0;
+        let cy = h as f32 / 2.0;
+        let act = 0.6f32;
+        let ctx = PatternCtx { frame: 5, activity: act, vram_fill: 0.3, temp_factor: 0.4 };
+
+        let mut max_r2: f32 = 0.0;
+        for p in &particles {
+            if let Some((r, g, b)) = pat.color(p, &ctx) {
+                let depth = 3.0 / (3.0 + p.z * 0.8);
+                let sx = cx + p.x * scale * depth;
+                let sy = cy + p.y * scale * depth;
+                if sx < 0.0 || sx > w as f32 || sy < 0.0 || sy > h as f32 { continue; }
+                let pr = (r as f32).clamp(0.0, 255.0);
+                let pg = (g as f32).clamp(0.0, 255.0);
+                let pb = (b as f32).clamp(0.0, 255.0);
+                let alpha = (0.3 + act * 0.5 + depth * 0.3).clamp(0.15, 0.95) * 0.5;
+                let ps = (p.size * depth * (0.8 + act * 1.2) * 0.5).max(0.8);
+                let r2 = (ps * 2.0).ceil() as i32;
+                max_r2 = max_r2.max(r2 as f32);
+                for dy in -r2..=r2 {
+                    for dx in -r2..=r2 {
+                        let ii = (sy as i32) + dy;
+                        let jj = (sx as i32) + dx;
+                        if ii < 0 || ii >= h as i32 || jj < 0 || jj >= w as i32 { continue; }
+                        let d = ((dx * dx + dy * dy) as f32).sqrt();
+                        if d > r2 as f32 { continue; }
+                        let o = ((ii as usize) * w + (jj as usize)) * 4;
+                        // Additive alpha blend over the buffer.
+                        let wgt = (1.0 - d / (r2 as f32 + 1.0)) * alpha;
+                        acc[o]     += pr * wgt;
+                        acc[o + 1] += pg * wgt;
+                        acc[o + 2] += pb * wgt;
+                        acc[o + 3] += wgt * 255.0;
+                    }
+                }
             }
         }
-        for q in &particles {
-            assert!(q.x.is_finite() && q.y.is_finite() && q.z.is_finite(),
-                "Sphere produced a non-finite position");
-            assert!(q.x.abs() < 10.0 && q.y.abs() < 10.0 && q.z.abs() < 10.0,
-                "Sphere particle escaped bounds: ({}, {}, {})", q.x, q.y, q.z);
+        // Write final premultiplied RGBA into the byte buffer.
+        let mut bbox_min_x = w as i32; let mut bbox_max_x = 0i32;
+        let mut bbox_min_y = h as i32; let mut bbox_max_y = 0i32;
+        for py in 0..h {
+            for px in 0..w {
+                let o = (py * w + px) * 4;
+                let rr = acc[o].min(255.0) as u8;
+                let gg = acc[o+1].min(255.0) as u8;
+                let bb = acc[o+2].min(255.0) as u8;
+                buf[o] = rr; buf[o+1] = gg; buf[o+2] = bb;
+                buf[o+3] = acc[o+3].min(255.0) as u8;
+                if buf[o+3] > 8 { // non-empty pixel
+                    bbox_min_x = bbox_min_x.min(px as i32);
+                    bbox_max_x = bbox_max_x.max(px as i32);
+                    bbox_min_y = bbox_min_y.min(py as i32);
+                    bbox_max_y = bbox_max_y.max(py as i32);
+                }
+            }
         }
-        // Distinct name so it's not a silent duplicate.
-        assert_eq!(p.name(), "14. Sphere");
+        // Write P6 PPM at /tmp/chip_render.ppm
+        let path = std::path::Path::new("/tmp/chip_render.ppm");
+        let mut ppm = Vec::new();
+        ppm.extend_from_slice(format!("P6\n{w}\n{h}\n255\n").as_bytes());
+        for py in 0..h {
+            for px in 0..w {
+                let o = (py * w + px) * 4;
+                ppm.push(buf[o]); ppm.push(buf[o+1]); ppm.push(buf[o+2]);
+            }
+        }
+        let _ = std::fs::write(path, &ppm);
+        let wpx = (bbox_max_x - bbox_min_x + 1) as usize;
+        let hpx = (bbox_max_y - bbox_min_y + 1) as usize;
+        assert!(wpx > 0 && hpx > 0, "chip render must produce non-empty pixels");
+        // A framed die should spread across most of the window.
+        assert!(wpx > w / 2 && hpx > h / 2,
+            "chip should fill the frame, got {wpx}x{hpx} bbox");
+        assert!(max_r2 >= 1.0, "particles should render with radius >= 1");
     }
 }

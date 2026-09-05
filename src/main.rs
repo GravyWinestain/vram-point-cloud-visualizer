@@ -1675,6 +1675,13 @@ fn main() -> eframe::Result<()> {
             .with_resizable(true)
             .with_transparent(true)
             .with_decorations(false)
+            // Centre the window on the DP-9 monitor (geometry 1848,0 1423x800).
+            // Note: on Wayland a client can't set its own absolute position, so
+            // this is a no-op there — the KWin window rule (kwinrulesrc, title
+            // "VRAM Point Cloud", position=2048,16 positionrule=2) is what
+            // actually places it on DP-9. This line matters only if the app
+            // runs under X11.
+            .with_position([2048.0, 16.0])
             .with_title("VRAM Point Cloud"),
         ..Default::default()
     };
